@@ -5,6 +5,7 @@ const Database = require("better-sqlite3");
 
 const DB_FILE_NAME = "cbdb_20260221.sqlite3";
 const isDev = !app.isPackaged;
+const shouldOpenDevTools = process.env.CBDB_OPEN_DEVTOOLS === "1";
 
 let mainWindow;
 let db;
@@ -364,7 +365,9 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL("http://localhost:5174");
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    if (shouldOpenDevTools) {
+      mainWindow.webContents.openDevTools({ mode: "detach" });
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
