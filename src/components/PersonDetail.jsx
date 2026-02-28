@@ -74,6 +74,14 @@ export default function PersonDetail({ personId, personName }) {
   }
 
   const { person } = data;
+  const courtesyText = (data.courtesyNames || [])
+    .map((item) => item.altNameChn || item.altName)
+    .filter(Boolean)
+    .join("、");
+  const styleText = (data.styleNames || [])
+    .map((item) => item.altNameChn || item.altName)
+    .filter(Boolean)
+    .join("、");
 
   return (
     <div className="panel detail-panel">
@@ -89,8 +97,22 @@ export default function PersonDetail({ personId, personName }) {
         <KeyValue label="性别" value={person.female === 1 ? "女" : "男/未详"} />
         <KeyValue label="姓氏" value={person.surnameChn} />
         <KeyValue label="名字" value={person.mingziChn} />
+        <KeyValue label="表字" value={courtesyText} />
+        <KeyValue label="号/别号" value={styleText} />
         <KeyValue label="族裔" value={person.ethnicity || person.tribe} />
       </div>
+
+      <Section title={`字号与别名 (${data.altNames.length})`}>
+        <div className="mini-table">
+          {data.altNames.slice(0, 120).map((row, idx) => (
+            <div key={`${row.typeCode}-${idx}`} className="mini-row">
+              <span>{row.typeName}</span>
+              <span>{row.altNameChn || row.altName || "未详"}</span>
+            </div>
+          ))}
+          {data.altNames.length === 0 && <div className="muted">暂无字号与别名记录</div>}
+        </div>
+      </Section>
 
       <Section title={`官职履历 (${data.offices.length})`}>
         <div className="mini-table">
@@ -146,4 +168,3 @@ export default function PersonDetail({ personId, personName }) {
     </div>
   );
 }
-

@@ -62,6 +62,190 @@ function buildKeywordVariants(keyword) {
   return unique([trimmed, convertToTraditional(trimmed)]);
 }
 
+function buildAliasKeywordVariants(keywordVariants) {
+  const variants = [];
+  for (const value of keywordVariants) {
+    const text = String(value || "").trim();
+    if (!text) {
+      continue;
+    }
+    variants.push(text);
+    if (/^[\u4e00-\u9fff]{3,}$/.test(text)) {
+      variants.push(text.slice(1));
+      variants.push(text.slice(-2));
+    }
+  }
+  return unique(variants).filter((item) => item.length >= 2);
+}
+
+const compoundSurnameList = [
+  "欧阳",
+  "司马",
+  "司徒",
+  "诸葛",
+  "上官",
+  "夏侯",
+  "东方",
+  "皇甫",
+  "尉迟",
+  "公孙",
+  "长孙",
+  "慕容",
+  "宇文",
+  "令狐",
+  "南宫",
+  "独孤",
+];
+
+function splitSurnameAndRemainder(text) {
+  const normalized = String(text || "").trim();
+  if (!/^[\u4e00-\u9fff]{2,}$/.test(normalized)) {
+    return null;
+  }
+
+  for (const compound of compoundSurnameList) {
+    if (normalized.startsWith(compound) && normalized.length > compound.length) {
+      return {
+        surname: compound,
+        remainder: normalized.slice(compound.length),
+      };
+    }
+  }
+
+  return {
+    surname: normalized.slice(0, 1),
+    remainder: normalized.slice(1),
+  };
+}
+
+function buildSurnameZiCombos(keywordVariants) {
+  const combos = [];
+  for (const variant of keywordVariants) {
+    const split = splitSurnameAndRemainder(variant);
+    if (!split || split.remainder.length < 1) {
+      continue;
+    }
+    combos.push(split);
+  }
+  const seen = new Set();
+  return combos.filter((item) => {
+    const key = `${item.surname}|${item.remainder}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildAliasMatchSubquery(aliasKeywordVariants, argsOut) {
+  if (!aliasKeywordVariants || aliasKeywordVariants.length === 0) {
+    return "0";
+  }
+
+  const clause = aliasKeywordVariants
+    .map(() => "(ad.c_alt_name_chn LIKE ? OR ad.c_alt_name LIKE ?)")
+    .join(" OR ");
+
+  for (const variant of aliasKeywordVariants) {
+    const like = escapeLike(variant);
+    argsOut.push(like, like);
+  }
+
+  return `
+    bm.c_personid IN (
+      SELECT ad.c_personid
+      FROM ALTNAME_DATA ad
+      WHERE ${clause}
+    )
+  `;
+}
+
+function buildSurnameZiMatchSubquery(surnameZiCombos, argsOut, options = {}) {
+  const type4Only = options.type4Only !== false;
+  if (!surnameZiCombos || surnameZiCombos.length === 0) {
+    return "0";
+  }
+
+  const clause = surnameZiCombos
+    .map(() => "(b2.c_surname_chn = ? AND (ad.c_alt_name_chn LIKE ? OR ad.c_alt_name LIKE ?))")
+    .join(" OR ");
+
+  for (const combo of surnameZiCombos) {
+    const like = escapeLike(combo.remainder);
+    argsOut.push(combo.surname, like, like);
+  }
+
+  return `
+    bm.c_personid IN (
+      SELECT ad.c_personid
+      FROM ALTNAME_DATA ad
+      JOIN BIOG_MAIN b2 ON b2.c_personid = ad.c_personid
+      WHERE ${type4Only ? "ad.c_alt_name_type_code = 4 AND" : ""} (${clause})
+    )
+  `;
+}
+
+function buildRelevanceExpressions(keywordVariants, aliasKeywordVariants, surnameZiCombos) {
+  if (!keywordVariants || keywordVariants.length === 0) {
+    return {
+      selectSql: `
+        0 AS rankExact,
+        0 AS rankSurnameZi,
+        0 AS rankAliasSameSurname,
+        0 AS rankAlias,
+        0 AS rankFuzzy
+      `,
+      orderSql: "bm.c_personid",
+      args: [],
+    };
+  }
+
+  const args = [];
+  const fuzzyFields = [
+    "bm.c_name_chn",
+    "bm.c_name",
+    "bm.c_name_rm",
+    "bm.c_name_proper",
+    "bm.c_surname_chn",
+    "bm.c_mingzi_chn",
+  ];
+
+  const exactClause = keywordVariants
+    .map(() => "(bm.c_name_chn = ? OR bm.c_name = ? COLLATE NOCASE OR bm.c_name_rm = ? COLLATE NOCASE OR bm.c_name_proper = ? COLLATE NOCASE)")
+    .join(" OR ");
+  for (const variant of keywordVariants) {
+    args.push(variant, variant, variant, variant);
+  }
+
+  const surnameZiClause = buildSurnameZiMatchSubquery(surnameZiCombos, args);
+  const aliasSameSurnameClause = buildSurnameZiMatchSubquery(surnameZiCombos, args, {
+    type4Only: false,
+  });
+  const aliasClause = buildAliasMatchSubquery(aliasKeywordVariants, args);
+
+  const fuzzyClause = keywordVariants
+    .map(() => `(${fuzzyFields.map((field) => `${field} LIKE ?`).join(" OR ")})`)
+    .join(" OR ");
+  for (const variant of keywordVariants) {
+    const like = escapeLike(variant);
+    args.push(...fuzzyFields.map(() => like));
+  }
+
+  return {
+    selectSql: `
+      CASE WHEN (${exactClause}) THEN 1 ELSE 0 END AS rankExact,
+      CASE WHEN (${surnameZiClause}) THEN 1 ELSE 0 END AS rankSurnameZi,
+      CASE WHEN (${aliasSameSurnameClause}) THEN 1 ELSE 0 END AS rankAliasSameSurname,
+      CASE WHEN (${aliasClause}) THEN 1 ELSE 0 END AS rankAlias,
+      CASE WHEN (${fuzzyClause}) THEN 1 ELSE 0 END AS rankFuzzy
+    `,
+    orderSql:
+      "rankExact DESC, rankSurnameZi DESC, rankAliasSameSurname DESC, rankAlias DESC, rankFuzzy DESC, bm.c_personid",
+    args,
+  };
+}
+
 function resolveDbPath(customPath) {
   const candidates = unique([
     customPath,
@@ -191,6 +375,8 @@ function createSearchWhere(payload) {
   const args = [];
 
   const keywordVariants = buildKeywordVariants(payload.keyword);
+  const aliasKeywordVariants = buildAliasKeywordVariants(keywordVariants);
+  const surnameZiCombos = buildSurnameZiCombos(keywordVariants);
   if (keywordVariants.length > 0) {
     const fields = [
       "bm.c_name_chn",
@@ -201,20 +387,25 @@ function createSearchWhere(payload) {
       "bm.c_mingzi_chn",
     ];
 
-    const keywordClauses = keywordVariants.map((variant) => {
+    const fieldClauses = keywordVariants.map((variant) => {
       const like = escapeLike(variant);
-      args.push(...fields.map(() => like), like, like);
-      return `(
-        ${fields.map((field) => `${field} LIKE ?`).join(" OR ")}
-        OR bm.c_personid IN (
-          SELECT ad.c_personid
-          FROM ALTNAME_DATA ad
-          WHERE ad.c_alt_name_chn LIKE ? OR ad.c_alt_name LIKE ?
-        )
-      )`;
+      args.push(...fields.map(() => like));
+      return `(${fields.map((field) => `${field} LIKE ?`).join(" OR ")})`;
     });
 
-    where.push(`(${keywordClauses.join(" OR ")})`);
+    const aliasClause = buildAliasMatchSubquery(aliasKeywordVariants, args);
+
+    const keywordOrClauses = [
+      `(${fieldClauses.join(" OR ")})`,
+      `(${aliasClause})`,
+    ];
+
+    if (surnameZiCombos.length > 0) {
+      const surnameZiClause = buildSurnameZiMatchSubquery(surnameZiCombos, args);
+      keywordOrClauses.push(`(${surnameZiClause})`);
+    }
+
+    where.push(`(${keywordOrClauses.join(" OR ")})`);
   }
 
   const dynastyId = toInt(payload.dynastyId);
@@ -255,6 +446,8 @@ function createSearchWhere(payload) {
     sql: where.length > 0 ? `WHERE ${where.join(" AND ")}` : "",
     args,
     keywordVariants,
+    aliasKeywordVariants,
+    surnameZiCombos,
   };
 }
 
@@ -265,6 +458,11 @@ function searchPeople(payload = {}) {
   const offset = (page - 1) * pageSize;
 
   const where = createSearchWhere(payload);
+  const relevance = buildRelevanceExpressions(
+    where.keywordVariants,
+    where.aliasKeywordVariants,
+    where.surnameZiCombos
+  );
 
   const countSql = `
     SELECT COUNT(*) AS total
@@ -274,6 +472,7 @@ function searchPeople(payload = {}) {
 
   const listSql = `
     SELECT
+      ${relevance.selectSql},
       bm.c_personid AS personId,
       bm.c_name_chn AS nameChn,
       bm.c_name AS namePinyin,
@@ -281,6 +480,26 @@ function searchPeople(payload = {}) {
       bm.c_deathyear AS deathYear,
       bm.c_dy AS dynastyId,
       COALESCE(d.c_dynasty_chn, d.c_dynasty, '未知') AS dynasty,
+      (
+        SELECT ad.c_alt_name_chn
+        FROM ALTNAME_DATA ad
+        WHERE ad.c_personid = bm.c_personid
+          AND ad.c_alt_name_type_code = 4
+          AND ad.c_alt_name_chn IS NOT NULL
+          AND ad.c_alt_name_chn <> ''
+        ORDER BY ad.c_sequence
+        LIMIT 1
+      ) AS courtesyName,
+      (
+        SELECT ad.c_alt_name_chn
+        FROM ALTNAME_DATA ad
+        WHERE ad.c_personid = bm.c_personid
+          AND ad.c_alt_name_type_code = 5
+          AND ad.c_alt_name_chn IS NOT NULL
+          AND ad.c_alt_name_chn <> ''
+        ORDER BY ad.c_sequence
+        LIMIT 1
+      ) AS styleName,
       (
         SELECT COALESCE(o.c_office_chn, o.c_office_pinyin)
         FROM POSTED_TO_OFFICE_DATA p
@@ -292,12 +511,14 @@ function searchPeople(payload = {}) {
     FROM BIOG_MAIN bm
     LEFT JOIN DYNASTIES d ON d.c_dy = bm.c_dy
     ${where.sql}
-    ORDER BY bm.c_personid
+    ORDER BY ${relevance.orderSql}
     LIMIT ? OFFSET ?
   `;
 
   const total = db.prepare(countSql).get(...where.args).total;
-  const items = db.prepare(listSql).all(...where.args, pageSize, offset);
+  const items = db
+    .prepare(listSql)
+    .all(...relevance.args, ...where.args, pageSize, offset);
 
   return {
     total,
@@ -434,6 +655,26 @@ function getPersonDetail(personId) {
     )
     .all(pid);
 
+  const altNames = db
+    .prepare(
+      `
+      SELECT
+        a.c_alt_name_chn AS altNameChn,
+        a.c_alt_name AS altName,
+        a.c_alt_name_type_code AS typeCode,
+        COALESCE(ac.c_name_type_desc_chn, ac.c_name_type_desc, '别名') AS typeName
+      FROM ALTNAME_DATA a
+      LEFT JOIN ALTNAME_CODES ac ON ac.c_name_type_code = a.c_alt_name_type_code
+      WHERE a.c_personid = ?
+      ORDER BY a.c_alt_name_type_code, a.c_sequence
+      LIMIT 200
+    `
+    )
+    .all(pid);
+
+  const courtesyNames = altNames.filter((item) => item.typeCode === 4);
+  const styleNames = altNames.filter((item) => item.typeCode === 5);
+
   return {
     person,
     offices,
@@ -441,6 +682,9 @@ function getPersonDetail(personId) {
     entries,
     associations,
     addresses,
+    altNames,
+    courtesyNames,
+    styleNames,
   };
 }
 

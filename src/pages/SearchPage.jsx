@@ -61,7 +61,7 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
       <section className="panel">
         <h2>人物搜索系统</h2>
         <p className="subtle">
-          支持姓名（中文/拼音）、朝代、官职与科举条件；内置繁简关键词兼容与分页加载。
+          支持姓名（中文/拼音）、表字/别号、朝代、官职与科举条件；内置繁简关键词兼容与分页加载。
         </p>
 
         <form className="search-form" onSubmit={handleSubmit}>
@@ -71,7 +71,7 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
               type="text"
               value={filters.keyword}
               onChange={(e) => setFilters((prev) => ({ ...prev, keyword: e.target.value }))}
-              placeholder="例：王阳明 / Wang / 苏轼"
+              placeholder="例：王阳明 / 王伯安 / Wang / 苏轼"
             />
           </label>
 
@@ -148,14 +148,23 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
                   })
                 }
               >
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: highlightText(
-                      person.nameChn || person.namePinyin || "",
-                      filters.keyword
-                    ),
-                  }}
-                />
+                <span className="name-block">
+                  <span
+                    dangerouslySetInnerHTML={{
+                      __html: highlightText(
+                        person.nameChn || person.namePinyin || "",
+                        filters.keyword
+                      ),
+                    }}
+                  />
+                  {(person.courtesyName || person.styleName) && (
+                    <small>
+                      {person.courtesyName ? `字${person.courtesyName}` : ""}
+                      {person.courtesyName && person.styleName ? " / " : ""}
+                      {person.styleName ? `号${person.styleName}` : ""}
+                    </small>
+                  )}
+                </span>
                 <span>{person.dynasty}</span>
                 <span>{formatYearRange(person.birthYear, person.deathYear)}</span>
                 <span>{person.firstOffice || "未详官职"}</span>
@@ -185,4 +194,3 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
     </div>
   );
 }
-

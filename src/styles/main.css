@@ -258,6 +258,16 @@ select {
   background: linear-gradient(90deg, rgba(139, 77, 42, 0.24), rgba(47, 111, 125, 0.12));
 }
 
+.name-block {
+  display: grid;
+  gap: 2px;
+}
+
+.name-block small {
+  color: var(--ink-subtle);
+  font-size: 0.78rem;
+}
+
 mark {
   background: #ffe6a7;
   color: inherit;
@@ -458,4 +468,3 @@ mark {
     grid-template-columns: 1fr;
   }
 }
-
