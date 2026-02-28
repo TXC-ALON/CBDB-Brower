@@ -1,0 +1,69 @@
+{
+    // ========== 终端配置 ==========
+    "terminal.integrated.scrollback": 100000, // 终端缓存行数设置为100000行
+    // ========== 编辑器基础配置 ==========
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd", // 设置全局默认格式化器
+    "editor.formatOnSave": true, // 保存文件时自动格式化
+    "editor.wordWrap": "on",//编辑器自动换行
+    "files.autoSaveDelay": 5000, //停止输入5秒就自动保存
+    "editor.insertSpaces": true, // 使用空格替代tab
+    "editor.fontFamily": "JetBrains Mono NL,Consolas",//设置编辑器字体
+    "editor.mouseWheelZoom": true, // 启用Ctrl+滚轮缩放编辑器字体大小
+    "diffEditor.ignoreTrimWhitespace": false, // 差异编辑器不忽略空格
+    "files.trimTrailingWhitespace": true, // 自动清理尾部空格
+    // ========== 工作区界面配置 ==========
+    "workbench.editor.wrapTabs": true, // 标签栏多行显示
+    // ========== Git配置 ==========
+    "git.ignoreLimitWarning": true, // 忽略Git大量文件警告
+    // ========== CMake配置 ==========
+    //"cmake.parallelJobs": 8, //如果指定为0，似乎会使用系统最大核心数+2
+    "cmake.configureOnOpen": false, //打开CMake项目时不自动运行 CMake 的配置
+    "cmake.sourceDirectory": "工作目录", // 设置CMake源文件目录（需要替换为实际路径）
+    "cmake.options.statusBarVisibility": "compact", // CMake工具栏紧凑显示
+    // ========== C/C++扩展配置 ==========
+    "C_Cpp.autocomplete": "disabled", // 禁用C/C++扩展的自动补全（使用clangd）
+    "C_Cpp.errorSquiggles": "disabled", // 禁用C/C++扩展的错误波形显示
+    "C_Cpp.formatting": "clangFormat", // C/C++扩展使用clang-format格式化
+    "C_Cpp.clang_format_fallbackStyle": "file", // 使用clang-format file格式化
+    "C_Cpp.intelliSenseEngine": "disabled", // 禁用C/C++扩展的IntelliSense（使用clangd）
+    // ========== Clangd配置 ==========
+    "clang-format.executable": "/data/install-2024/llvm-18.1.8/bin/clang-format", // 指定clang-format可执行文件路径
+    "clangd.arguments": [
+        // 索引相关配置
+        "--compile-commands-dir=${workspaceFolder}/build", //指定编译命令数据库（compile_commands.json）所在的目录
+        "--background-index", // 启用后台索引构建，提升代码导航速度
+        "--background-index-priority=normal", // 设置索引优先级为正常
+        "--header-insertion=never", // 禁止自动插入头文件
+        "--fallback-style=none", // 不设置格式化回退风格
+        "--clang-tidy", // 启用clang-tidy静态代码分析
+        "--all-scopes-completion", // 启用全项目范围的代码补全
+        "--completion-style=detailed", // 显示详细的补全信息
+    ],
+
+   // ========== 根据需要可选 ==========
+    "editor.rulers": [
+      {
+        "column": 100,
+        "color": "#58C4DD"
+      }
+    ],// 编辑器设置标尺
+    "editor.wordWrap": "bounded",  // 在标尺处自动换行
+    "editor.wordWrapColumn": 100,      // 控制换行位置
+    "search.useIgnoreFiles": true,  //搜索时忽视gitignore和ignore标记的文件
+    "editor.smoothScrolling": true, // 启用平滑滚动效果
+    "editor.cursorBlinking": "expand", // 光标以扩展动画效果闪烁
+    "editor.cursorSmoothCaretAnimation": "on", // 开启光标平滑动画
+    "workbench.list.smoothScrolling": true, // 工作台列表的平滑滚动效果
+    "terminal.integrated.cursorBlinking": true, // 终端光标闪烁
+    "terminal.integrated.cursorStyle": "line", // 终端光标样式为线型
+    "terminal.integrated.fontFamily": "JetBrains Mono NL,Consolas", // 终端字体
+    "terminal.integrated.fontSize": 14, // 终端字体大小
+    "terminal.integrated.stickyScroll.enabled": true, // 终端sticky scroll功能（显示命令上下文）
+    "terminal.integrated.rightClickBehavior": "copyPaste",
+    "claudeCode.claudeProcessWrapper": "",
+    "claudeCode.selectedModel": "MiniMax-M2.5",
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "terminal.integrated.env.windows": {
+        "CLAUDE_SKIP_PERMISSIONS": "1"
+    }
+}
