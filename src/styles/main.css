@@ -360,6 +360,27 @@ mark {
   margin-top: 14px;
 }
 
+.graph-toggle {
+  margin: 8px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #55493d;
+}
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin: 8px 0 6px;
+}
+
+.graph-toggle input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+}
+
 .summary-cards {
   margin-top: 10px;
   display: grid;
