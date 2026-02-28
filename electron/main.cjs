@@ -701,7 +701,10 @@ function getRelationshipGraph(personId) {
   const root = db
     .prepare(
       `
-      SELECT c_personid AS id, COALESCE(c_name_chn, c_name, '未详') AS name
+      SELECT
+        c_personid AS id,
+        COALESCE(c_name_chn, c_name, '未详') AS name,
+        c_female AS female
       FROM BIOG_MAIN
       WHERE c_personid = ?
     `
@@ -718,7 +721,13 @@ function getRelationshipGraph(personId) {
       SELECT
         k.c_kin_id AS targetId,
         COALESCE(m.c_name_chn, m.c_name, '未详') AS targetName,
+        m.c_female AS targetFemale,
         COALESCE(kc.c_kinrel_chn, kc.c_kinrel, '亲属') AS relation,
+        k.c_kin_code AS kinCode,
+        kc.c_upstep AS upStep,
+        kc.c_dwnstep AS downStep,
+        kc.c_marstep AS marriageStep,
+        kc.c_colstep AS collateralStep,
         'family' AS relationType
       FROM KIN_DATA k
       LEFT JOIN KINSHIP_CODES kc ON kc.c_kincode = k.c_kin_code
@@ -735,6 +744,7 @@ function getRelationshipGraph(personId) {
       SELECT
         a.c_assoc_id AS targetId,
         COALESCE(m.c_name_chn, m.c_name, '未详') AS targetName,
+        m.c_female AS targetFemale,
         COALESCE(ac.c_assoc_desc_chn, ac.c_assoc_desc, '社会关系') AS relation,
         'social' AS relationType
       FROM ASSOC_DATA a
@@ -750,6 +760,7 @@ function getRelationshipGraph(personId) {
   nodesById.set(root.id, {
     id: String(root.id),
     name: root.name,
+    female: root.female ?? null,
     category: "root",
     symbolSize: 52,
   });
@@ -768,9 +779,15 @@ function getRelationshipGraph(personId) {
       nodesById.set(targetId, {
         id: targetId,
         name: row.targetName || `人物 ${targetId}`,
+        female: row.targetFemale ?? null,
         category: row.relationType === "family" ? "family" : "social",
         symbolSize: row.relationType === "family" ? 32 : 26,
       });
+    } else {
+      const existing = nodesById.get(targetId);
+      if ((existing.female === null || existing.female === undefined) && row.targetFemale !== null) {
+        existing.female = row.targetFemale;
+      }
     }
 
     const edgeKey = `${root.id}|${targetId}|${row.relation}`;
@@ -784,6 +801,15 @@ function getRelationshipGraph(personId) {
       target: targetId,
       name: row.relation,
       relationType: row.relationType,
+      kinCode: row.kinCode ?? null,
+      upStep: row.upStep ?? null,
+      downStep: row.downStep ?? null,
+      marriageStep: row.marriageStep ?? null,
+      collateralStep: row.collateralStep ?? null,
+      generation:
+        Number.isFinite(Number(row.downStep)) && Number.isFinite(Number(row.upStep))
+          ? Number(row.downStep) - Number(row.upStep)
+          : null,
     });
   }
 

@@ -53,6 +53,11 @@ export default function App() {
     }
   };
 
+  const handleGraphNavigatePerson = (person) => {
+    setSelectedPerson(person);
+    setActiveTab("graph");
+  };
+
   const tabContent = useMemo(() => {
     if (activeTab === "search") {
       return (
@@ -65,7 +70,9 @@ export default function App() {
       );
     }
     if (activeTab === "graph") {
-      return <GraphPage selectedPerson={selectedPerson} />;
+      return (
+        <GraphPage selectedPerson={selectedPerson} onNavigatePerson={handleGraphNavigatePerson} />
+      );
     }
     if (activeTab === "map") {
       return <MapPage dynasties={dynasties} selectedPerson={selectedPerson} />;
@@ -117,4 +124,3 @@ export default function App() {
     </div>
   );
 }
-
