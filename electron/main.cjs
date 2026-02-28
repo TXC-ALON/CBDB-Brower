@@ -865,6 +865,7 @@ function getGeoDistribution(payload = {}) {
           COALESCE(bac.c_addr_desc_chn, bac.c_addr_desc, '活动地点') AS addrType,
           addr.x_coord AS longitude,
           addr.y_coord AS latitude,
+          ba.c_sequence AS sequence,
           ba.c_firstyear AS firstYear,
           ba.c_lastyear AS lastYear
         FROM BIOG_ADDR_DATA ba
