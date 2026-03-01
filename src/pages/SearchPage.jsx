@@ -56,6 +56,17 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
     runSearch(1);
   };
 
+  const handleSelectResultPerson = (person) => {
+    const picked = {
+      id: person.personId,
+      name: person.nameChn || person.namePinyin || `人物 ${person.personId}`,
+    };
+    onSelectPerson({
+      id: picked.id,
+      name: picked.name,
+    });
+  };
+
   return (
     <div className="grid two-col">
       <section className="panel">
@@ -141,12 +152,7 @@ export default function SearchPage({ dynasties, selectedPerson, onSelectPerson, 
                 className={`result-row ${
                   person.personId === selectedPerson?.id ? "selected" : ""
                 }`}
-                onClick={() =>
-                  onSelectPerson({
-                    id: person.personId,
-                    name: person.nameChn || person.namePinyin || `人物 ${person.personId}`,
-                  })
-                }
+                onClick={() => handleSelectResultPerson(person)}
               >
                 <span className="name-block">
                   <span
