@@ -833,7 +833,8 @@ function getRelationshipGraph(personId) {
   };
 }
 
-function buildGeoWhere(params) {
+function buildGeoWhere(params, options = {}) {
+  const includeYear = options.includeYear !== false;
   const where = ["addr.x_coord IS NOT NULL", "addr.y_coord IS NOT NULL"];
   const args = [];
 
@@ -843,16 +844,18 @@ function buildGeoWhere(params) {
     args.push(dynastyId);
   }
 
-  const startYear = toInt(params.startYear);
-  if (startYear !== null) {
-    where.push("COALESCE(ba.c_firstyear, ba.c_lastyear) >= ?");
-    args.push(startYear);
-  }
+  if (includeYear) {
+    const startYear = toInt(params.startYear);
+    if (startYear !== null) {
+      where.push("COALESCE(ba.c_firstyear, ba.c_lastyear) >= ?");
+      args.push(startYear);
+    }
 
-  const endYear = toInt(params.endYear);
-  if (endYear !== null) {
-    where.push("COALESCE(ba.c_lastyear, ba.c_firstyear) <= ?");
-    args.push(endYear);
+    const endYear = toInt(params.endYear);
+    if (endYear !== null) {
+      where.push("COALESCE(ba.c_lastyear, ba.c_firstyear) <= ?");
+      args.push(endYear);
+    }
   }
 
   return {
@@ -865,7 +868,9 @@ function getGeoDistribution(payload = {}) {
   assertDbReady();
   const limit = clamp(toInt(payload.limit, 1200), 200, 2000);
   const personId = toInt(payload.personId);
+  const includeTimeline = payload.includeTimeline !== false;
   const where = buildGeoWhere(payload);
+  const whereNoYear = buildGeoWhere(payload, { includeYear: false });
 
   if (personId) {
     const points = db
@@ -907,10 +912,40 @@ function getGeoDistribution(payload = {}) {
       )
       .all(...where.args, personId);
 
+    const personRow = db
+      .prepare(
+        `
+        SELECT
+          NULLIF(c_birthyear, 0) AS birthYear,
+          NULLIF(c_deathyear, 0) AS deathYear
+        FROM BIOG_MAIN
+        WHERE c_personid = ?
+      `
+      )
+      .get(personId);
+
+    const activityExtent = db
+      .prepare(
+        `
+        SELECT
+          MIN(COALESCE(ba.c_firstyear, ba.c_lastyear)) AS minYear,
+          MAX(COALESCE(ba.c_lastyear, ba.c_firstyear)) AS maxYear
+        FROM BIOG_ADDR_DATA ba
+        LEFT JOIN BIOG_MAIN bm ON bm.c_personid = ba.c_personid
+        LEFT JOIN ADDR_CODES addr ON addr.c_addr_id = ba.c_addr_id
+        ${whereNoYear.sql} AND ba.c_personid = ? AND COALESCE(ba.c_firstyear, ba.c_lastyear) IS NOT NULL
+      `
+      )
+      .get(...whereNoYear.args, personId);
+
     return {
       mode: "person",
       points,
       timeline,
+      yearExtent: {
+        minYear: personRow?.birthYear ?? activityExtent?.minYear ?? null,
+        maxYear: personRow?.deathYear ?? activityExtent?.maxYear ?? null,
+      },
     };
   }
 
@@ -934,26 +969,60 @@ function getGeoDistribution(payload = {}) {
     )
     .all(...where.args, limit);
 
-  const timeline = db
+  const timeline = includeTimeline
+    ? db
+        .prepare(
+          `
+          SELECT
+            (COALESCE(ba.c_firstyear, ba.c_lastyear) / 10) * 10 AS decade,
+            COUNT(*) AS count
+          FROM BIOG_ADDR_DATA ba
+          LEFT JOIN BIOG_MAIN bm ON bm.c_personid = ba.c_personid
+          LEFT JOIN ADDR_CODES addr ON addr.c_addr_id = ba.c_addr_id
+          ${where.sql} AND COALESCE(ba.c_firstyear, ba.c_lastyear) IS NOT NULL
+          GROUP BY decade
+          ORDER BY decade
+        `
+        )
+        .all(...where.args)
+    : [];
+
+  const lifeExtent = db
     .prepare(
       `
       SELECT
-        (COALESCE(ba.c_firstyear, ba.c_lastyear) / 10) * 10 AS decade,
-        COUNT(*) AS count
+        MIN(NULLIF(bm.c_birthyear, 0)) AS minBirthYear,
+        MAX(NULLIF(bm.c_deathyear, 0)) AS maxDeathYear
       FROM BIOG_ADDR_DATA ba
       LEFT JOIN BIOG_MAIN bm ON bm.c_personid = ba.c_personid
       LEFT JOIN ADDR_CODES addr ON addr.c_addr_id = ba.c_addr_id
-      ${where.sql} AND COALESCE(ba.c_firstyear, ba.c_lastyear) IS NOT NULL
-      GROUP BY decade
-      ORDER BY decade
+      ${whereNoYear.sql}
     `
     )
-    .all(...where.args);
+    .get(...whereNoYear.args);
+
+  const activityExtent = db
+    .prepare(
+      `
+      SELECT
+        MIN(COALESCE(ba.c_firstyear, ba.c_lastyear)) AS minYear,
+        MAX(COALESCE(ba.c_lastyear, ba.c_firstyear)) AS maxYear
+      FROM BIOG_ADDR_DATA ba
+      LEFT JOIN BIOG_MAIN bm ON bm.c_personid = ba.c_personid
+      LEFT JOIN ADDR_CODES addr ON addr.c_addr_id = ba.c_addr_id
+      ${whereNoYear.sql} AND COALESCE(ba.c_firstyear, ba.c_lastyear) IS NOT NULL
+    `
+    )
+    .get(...whereNoYear.args);
 
   return {
     mode: "aggregate",
     points,
     timeline,
+    yearExtent: {
+      minYear: lifeExtent?.minBirthYear ?? activityExtent?.minYear ?? null,
+      maxYear: lifeExtent?.maxDeathYear ?? activityExtent?.maxYear ?? null,
+    },
   };
 }
 

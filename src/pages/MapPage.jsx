@@ -119,7 +119,7 @@ export default function MapPage({ dynasties, selectedPerson }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mode, setMode] = useState("aggregate");
-  const [geoData, setGeoData] = useState({ points: [], timeline: [] });
+  const [geoData, setGeoData] = useState({ points: [], timeline: [], yearExtent: null });
   const [personDetail, setPersonDetail] = useState(null);
   const [activeRouteIndex, setActiveRouteIndex] = useState(0);
   const [autoPlay, setAutoPlay] = useState(true);
@@ -131,16 +131,20 @@ export default function MapPage({ dynasties, selectedPerson }) {
     followPerson: true,
   });
   const autoYearRef = useRef({ personId: null, startYear: "", endYear: "" });
+  const loadRequestSeqRef = useRef(0);
   const waitingForPerson = filters.followPerson && !selectedPerson?.id;
 
   const loadData = async () => {
+    const requestSeq = ++loadRequestSeqRef.current;
     setLoading(true);
     setError("");
 
     if (waitingForPerson) {
-      setMode("person");
-      setGeoData({ points: [], timeline: [] });
-      setLoading(false);
+      if (requestSeq === loadRequestSeqRef.current) {
+        setMode("person");
+        setGeoData({ points: [], timeline: [], yearExtent: null });
+        setLoading(false);
+      }
       return;
     }
 
@@ -150,14 +154,23 @@ export default function MapPage({ dynasties, selectedPerson }) {
         startYear: filters.startYear || null,
         endYear: filters.endYear || null,
         personId: filters.followPerson ? selectedPerson?.id : null,
+        includeTimeline: Boolean(filters.followPerson),
       };
       const result = await getGeoDistribution(payload);
+      if (requestSeq !== loadRequestSeqRef.current) {
+        return;
+      }
       setMode(result.mode);
       setGeoData(result);
     } catch (err) {
+      if (requestSeq !== loadRequestSeqRef.current) {
+        return;
+      }
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (requestSeq === loadRequestSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -178,11 +191,6 @@ export default function MapPage({ dynasties, selectedPerson }) {
       return;
     }
 
-    if (!filters.followPerson || !selectedPerson?.id) {
-      setPersonDetail(null);
-      return;
-    }
-
     let cancelled = false;
 
     getPersonDetail(selectedPerson.id)
@@ -191,6 +199,10 @@ export default function MapPage({ dynasties, selectedPerson }) {
           return;
         }
         setPersonDetail(detail);
+
+        if (!filters.followPerson) {
+          return;
+        }
 
         const person = detail.person;
         const nextStart =
@@ -458,6 +470,18 @@ export default function MapPage({ dynasties, selectedPerson }) {
           ? 10 + Math.min(14, Math.max(0, (p.visitCount || 1) - 1) * 2)
           : Math.max(6, Math.min(20, (p.personCount || 0) / 7)),
     }));
+    const aggregateHeatData =
+      mode !== "person"
+        ? geoData.points.map((p) => ({
+            name: p.addrName,
+            value: [Number(p.longitude), Number(p.latitude), Math.max(1, Number(p.personCount || 0))],
+            raw: p,
+          }))
+        : [];
+    const aggregateMaxCount =
+      mode !== "person"
+        ? Math.max(1, ...geoData.points.map((p) => Number(p.personCount || 0)))
+        : 1;
 
     const lineData =
       mode === "person"
@@ -574,6 +598,25 @@ export default function MapPage({ dynasties, selectedPerson }) {
         : [];
 
     return {
+      visualMap:
+        mode !== "person"
+          ? {
+              show: true,
+              min: 0,
+              max: aggregateMaxCount,
+              calculable: true,
+              orient: "horizontal",
+              left: "center",
+              bottom: 12,
+              text: ["高", "低"],
+              inRange: {
+                color: ["#f7f2dd", "#f6c87f", "#ea8f4a", "#bc3f1f"],
+              },
+              textStyle: {
+                color: "#4e4539",
+              },
+            }
+          : undefined,
       tooltip: {
         trigger: "item",
         formatter: (params) => {
@@ -605,37 +648,51 @@ export default function MapPage({ dynasties, selectedPerson }) {
         },
       },
       series: [
-        {
-          type: mode === "person" ? "scatter" : "effectScatter",
-          coordinateSystem: "geo",
-          data: points,
-          ...(mode === "person"
-            ? {}
-            : {
-                rippleEffect: {
-                  scale: 4,
-                  brushType: "stroke",
+        ...(mode !== "person"
+          ? [
+              {
+                type: "heatmap",
+                coordinateSystem: "geo",
+                data: aggregateHeatData,
+                pointSize: 11,
+                blurSize: 17,
+                z: 3,
+              },
+              {
+                type: "scatter",
+                coordinateSystem: "geo",
+                data: points,
+                z: 4,
+                itemStyle: {
+                  color: "#fff7ec",
+                  borderColor: "#8a6f4f",
+                  borderWidth: 1.1,
+                  opacity: 0.92,
                 },
-              }),
-          itemStyle: {
-            color: (params) => {
-              if (mode !== "person") {
-                return "#2f6f7d";
-              }
-              const state = params.data?.pointState;
-              if (state === "active") {
-                return "#1565c0";
-              }
-              if (state === "passed") {
-                return "#2f6f7d";
-              }
-              return "#b8a58e";
-            },
-            borderColor: mode === "person" ? "#f7efe1" : "#e6f0ef",
-            borderWidth: mode === "person" ? 1.4 : 1,
-            opacity: mode === "person" ? 0.95 : 0.9,
-          },
-        },
+              },
+            ]
+          : [
+              {
+                type: "scatter",
+                coordinateSystem: "geo",
+                data: points,
+                itemStyle: {
+                  color: (params) => {
+                    const state = params.data?.pointState;
+                    if (state === "active") {
+                      return "#1565c0";
+                    }
+                    if (state === "passed") {
+                      return "#2f6f7d";
+                    }
+                    return "#b8a58e";
+                  },
+                  borderColor: "#f7efe1",
+                  borderWidth: 1.4,
+                  opacity: 0.95,
+                },
+              },
+            ]),
         ...activePointSeries,
         ...legLabelSeries,
         ...(lineData.length > 1
@@ -895,18 +952,20 @@ export default function MapPage({ dynasties, selectedPerson }) {
         </div>
       )}
 
-      <div className="timeline-strip">
-        <h4>时间轴统计</h4>
-        <div className="mini-table">
-          {geoData.timeline.slice(0, 60).map((row, idx) => (
-            <div className="mini-row" key={`timeline-${idx}`}>
-              <span>{row.year ?? row.decade}</span>
-              <span>{row.count}</span>
-            </div>
-          ))}
-          {geoData.timeline.length === 0 && <div className="muted">无可用时间轴数据</div>}
+      {mode === "person" && (
+        <div className="timeline-strip">
+          <h4>时间轴统计</h4>
+          <div className="mini-table">
+            {geoData.timeline.slice(0, 60).map((row, idx) => (
+              <div className="mini-row" key={`timeline-${idx}`}>
+                <span>{row.year ?? row.decade}</span>
+                <span>{row.count}</span>
+              </div>
+            ))}
+            {geoData.timeline.length === 0 && <div className="muted">无可用时间轴数据</div>}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }
