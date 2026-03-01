@@ -198,6 +198,8 @@ function analyzeRelationTextSignals(relationName) {
     child: /子|女|兒|儿|婿|媳/.test(text),
     grandchild: /孫|孙/.test(text),
     greatDescendant: /曾孫|曾孙|玄孫|玄孙|來孫|来孙|晜孫|昆孙/.test(text),
+    linealDescendant: /直系後裔|直系后裔|後裔|后裔|苗裔|後人|后人|裔孫|裔孙|裔/.test(text),
+    descendantInLaw: /後裔之夫|後裔之妻|后裔之夫|后裔之妻|裔之夫|裔之妻|孫媳|孙媳|孫婿|孙婿/.test(text),
   };
 }
 
@@ -206,11 +208,13 @@ function analyzeStepSignals(link) {
   const down = toNumericStep(link.downStep);
   const mar = toNumericStep(link.marriageStep) ?? 0;
   const col = toNumericStep(link.collateralStep) ?? 0;
-  const hasStep = !isUnknownStep(up) && !isUnknownStep(down);
-  const generation = hasStep ? down - up : null;
+  const hasUp = !isUnknownStep(up);
+  const hasDown = !isUnknownStep(down);
+  const hasStep = hasUp && hasDown;
+  let generation = hasStep ? down - up : null;
 
   let stepLane = "other";
-  if (Number.isFinite(generation)) {
+  if (hasStep && Number.isFinite(generation)) {
     if (generation < 0) {
       stepLane = "ancestor";
     } else if (generation > 0) {
@@ -219,6 +223,18 @@ function analyzeStepSignals(link) {
       stepLane = "spouse";
     } else if (col > 0) {
       stepLane = "sibling";
+    }
+  } else if (hasUp && !hasDown) {
+    // 例如 up=0/down=99 的“直系后裔”类，按下代远支处理。
+    if (up === 0) {
+      stepLane = "descendant";
+      generation = 3;
+    }
+  } else if (!hasUp && hasDown) {
+    // 反向场景：上行未知但下行为0，按上代远支处理。
+    if (down === 0) {
+      stepLane = "ancestor";
+      generation = -3;
     }
   }
 
@@ -235,6 +251,7 @@ function analyzeStepSignals(link) {
 
 function classifyFamilyRelation(link) {
   const relation = String(link.name || "亲属");
+  const relationText = normalizeRelationText(relation);
   const textSignals = analyzeRelationTextSignals(relation);
   const stepSignals = analyzeStepSignals(link);
   const inferredGender = inferGenderFromRelation(relation);
@@ -274,6 +291,16 @@ function classifyFamilyRelation(link) {
     generation = 0;
     relationClass = "sibling";
     relationRank = 30;
+  } else if (textSignals.descendantInLaw) {
+    lane = "descendant";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 3;
+    relationClass = "descendant_inlaw";
+    relationRank = 41;
+  } else if (textSignals.linealDescendant) {
+    lane = "descendant";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 3;
+    relationClass = "lineal_descendant";
+    relationRank = 45;
   } else if (textSignals.child) {
     lane = "descendant";
     generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 1;
@@ -303,6 +330,20 @@ function classifyFamilyRelation(link) {
     generation = 0;
   } else {
     generation = Number.isFinite(generation) ? generation : 0;
+  }
+
+  const shouldBypass =
+    relationClass === "lineal_descendant" ||
+    relationClass === "descendant_inlaw" ||
+    relationClass === "other" ||
+    /未詳|未详|非可用/.test(relationText);
+  if (shouldBypass) {
+    lane = "bypass";
+    generation = 0;
+    if (relationClass === "other") {
+      relationClass = "unknown_bypass";
+      relationRank = 120;
+    }
   }
 
   return {
@@ -409,6 +450,24 @@ function layoutSideLaneItems(items, lane) {
   });
 }
 
+function layoutBypassItems(items) {
+  if (!items.length) {
+    return [];
+  }
+
+  const sorted = [...items].sort(compareFamilyNodeOrder);
+  const widths = sorted.map((item) => estimateTextWidth(item.name));
+  const baseX = 760;
+  const verticalGap = 140;
+  const centerOffset = (sorted.length - 1) / 2;
+
+  return sorted.map((item, index) => ({
+    ...item,
+    x: Math.round(baseX + (widths[index] - 72) * 0.25),
+    y: Math.round(320 + (index - centerOffset) * verticalGap),
+  }));
+}
+
 const malePalette = ["#1f3f67", "#27517b", "#316492", "#3f79a8", "#5291ba", "#73aad0", "#97c2df", "#bdd9ee"];
 const femalePalette = [
   "#7b2e55",
@@ -479,6 +538,7 @@ const laneColorMap = {
   spouse: "#9b6a32",
   sibling: "#756592",
   descendant: "#2f7c5a",
+  bypass: "#8a806f",
   other: "#7e6a55",
 };
 
@@ -494,6 +554,9 @@ function symbolByLane(lane) {
   }
   if (lane === "sibling") {
     return "circle";
+  }
+  if (lane === "bypass") {
+    return "roundRect";
   }
   return "roundRect";
 }
@@ -517,6 +580,9 @@ function symbolSizeByLane(lane, generation) {
   if (lane === "sibling") {
     return 29;
   }
+  if (lane === "bypass") {
+    return 22;
+  }
   return 24;
 }
 
@@ -528,6 +594,12 @@ function computeLayerY(lane, generation) {
   if (lane === "sibling") {
     return 0;
   }
+  if (lane === "other" && generation === 0) {
+    return 260;
+  }
+  if (lane === "bypass") {
+    return 320;
+  }
   return generation * generationGap;
 }
 
@@ -537,6 +609,9 @@ function computeRailY(nodeY, lane) {
   }
   if (lane === "spouse" || lane === "sibling") {
     return Math.round(nodeY * 0.82);
+  }
+  if (lane === "bypass") {
+    return Math.round(nodeY * 0.86);
   }
   return Math.round(nodeY * 0.62);
 }
@@ -575,8 +650,11 @@ function buildFamilyTreeGraph(graph) {
     ancestor: 108,
     sibling: 105,
     child: 102,
+    descendant_inlaw: 101,
     grandchild: 100,
     great_descendant: 98,
+    lineal_descendant: 97,
+    unknown_bypass: 96,
     step_ancestor: 90,
     step_descendant: 88,
     step_sibling: 84,
@@ -657,7 +735,8 @@ function buildFamilyTreeGraph(graph) {
     spouse: 2,
     sibling: 3,
     descendant: 4,
-    other: 5,
+    bypass: 5,
+    other: 6,
   };
 
   const placedRelatives = [];
@@ -668,7 +747,9 @@ function buildFamilyTreeGraph(graph) {
     const laid =
       lane === "spouse" || lane === "sibling"
         ? layoutSideLaneItems(items, lane)
-        : layoutLayerItems(items, y, 28);
+        : lane === "bypass"
+          ? layoutBypassItems(items)
+          : layoutLayerItems(items, y, 28);
 
     for (const item of laid) {
       placedRelatives.push({
@@ -789,7 +870,7 @@ function buildFamilyTreeGraph(graph) {
       isHelper: true,
       x: 0,
       y,
-      category: 6,
+      category: 7,
       symbolSize: 1,
       fixed: true,
       draggable: false,
@@ -832,7 +913,7 @@ function buildFamilyTreeGraph(graph) {
       isHelper: true,
       x: item.x,
       y: rail.y,
-      category: 6,
+      category: 7,
       symbolSize: 1,
       fixed: true,
       draggable: false,
@@ -891,7 +972,7 @@ function buildFamilyTreeGraph(graph) {
       isHelper: true,
       x: lane === "spouse" ? -150 : 150,
       y: 0,
-      category: 6,
+      category: 7,
       symbolSize: 1,
       fixed: true,
       draggable: false,
@@ -944,6 +1025,49 @@ function buildFamilyTreeGraph(graph) {
     };
   };
 
+  const createBypassHub = (generation) => {
+    const color = laneColorMap.bypass || laneColorMap.other;
+    const hubNo = railCounter;
+    const hubId = `__family_bypass_hub_${hubNo}`;
+    const rootEdgeId = `__family_edge_root_bypass_hub_${hubNo}`;
+    railCounter += 1;
+
+    helperNodes.push({
+      id: hubId,
+      name: "",
+      value: "",
+      isHelper: true,
+      x: 250,
+      y: 210,
+      category: 7,
+      symbolSize: 1,
+      fixed: true,
+      draggable: false,
+      label: { show: false },
+      itemStyle: { opacity: 0 },
+      tooltip: { show: false },
+      emphasis: { disabled: true },
+    });
+
+    links.push({
+      id: rootEdgeId,
+      source: rootId,
+      target: hubId,
+      relationType: "bypass_hub",
+      relativeId: null,
+      railId: hubId,
+      generation,
+      name: "",
+      value: "",
+      lineStyle: { color, width: 1.6, opacity: 0.7, type: "dotted" },
+      showRelationLabel: false,
+      label: { show: false },
+      tooltip: { show: false },
+    });
+
+    return { id: hubId, color, lane: "bypass", generation, rootEdgeId };
+  };
+
   const connectGroupByRail = (items, lane, generation) => {
     if (!items.length) {
       return;
@@ -967,6 +1091,18 @@ function buildFamilyTreeGraph(graph) {
           color: hub.color,
           width: laneStyle.width,
           type: laneStyle.type,
+        });
+      }
+      return;
+    }
+
+    if (lane === "bypass") {
+      const hub = createBypassHub(generation);
+      for (const item of items) {
+        connectViaSideHub(hub, item, {
+          color: hub.color,
+          width: 1.5,
+          type: "dotted",
         });
       }
       return;
@@ -1018,10 +1154,11 @@ function buildFamilyTreeGraph(graph) {
       { name: "配偶车道" },
       { name: "兄弟姐妹车道" },
       { name: "下代" },
+      { name: "旁路关系" },
       { name: "其他" },
       { name: "辅助结构" },
     ],
-    legendCategories: ["核心人物", "上代", "配偶车道", "兄弟姐妹车道", "下代", "其他"],
+    legendCategories: ["核心人物", "上代", "配偶车道", "兄弟姐妹车道", "下代", "旁路关系", "其他"],
     pathByNodeId,
   };
 }
@@ -1444,13 +1581,12 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
         color: [
           "#c7512f",
           "#4f6074",
-          "#60788d",
-          "#a36b2d",
+          "#9b6a32",
           "#756592",
           "#2f7c5a",
-          "#3f8f66",
-          "#51a879",
+          "#8a806f",
           "#7e6a55",
+          "#c8c1b5",
         ],
       };
     }
@@ -1617,7 +1753,7 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       )}
       {viewMode === "familyTree" && (
         <p className="subtle">
-          家谱按代际纵向分层（上代/核心/下代），配偶与兄弟姐妹改为核心同代左右“水平分支树”（左配偶树、右同辈树）；每个亲属采用复合节点：姓名在上、与核心关系在下，连线统一接入中心连接点。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
+          家谱按代际纵向分层（上代/核心/下代），配偶与兄弟姐妹改为核心同代左右“水平分支树”（左配偶树、右同辈树）；后裔远支与未詳/非可用关系走右下旁路，不干扰主干。每个亲属采用复合节点：姓名在上、与核心关系在下，连线统一接入中心连接点。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
         </p>
       )}
 
