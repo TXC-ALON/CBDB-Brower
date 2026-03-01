@@ -131,10 +131,18 @@ export default function MapPage({ dynasties, selectedPerson }) {
     followPerson: true,
   });
   const autoYearRef = useRef({ personId: null, startYear: "", endYear: "" });
+  const waitingForPerson = filters.followPerson && !selectedPerson?.id;
 
   const loadData = async () => {
     setLoading(true);
     setError("");
+
+    if (waitingForPerson) {
+      setMode("person");
+      setGeoData({ points: [], timeline: [] });
+      setLoading(false);
+      return;
+    }
 
     try {
       const payload = {
@@ -155,7 +163,14 @@ export default function MapPage({ dynasties, selectedPerson }) {
 
   useEffect(() => {
     loadData();
-  }, [filters.dynastyId, filters.startYear, filters.endYear, filters.followPerson, selectedPerson?.id]);
+  }, [
+    filters.dynastyId,
+    filters.startYear,
+    filters.endYear,
+    filters.followPerson,
+    selectedPerson?.id,
+    waitingForPerson,
+  ]);
 
   useEffect(() => {
     if (!selectedPerson?.id) {
@@ -758,6 +773,9 @@ export default function MapPage({ dynasties, selectedPerson }) {
       </div>
 
       {error && <div className="error-box">{error}</div>}
+      {waitingForPerson && !loading && (
+        <div className="muted">请先在人物检索中选择人物</div>
+      )}
       {loading && <div className="muted">地图数据加载中...</div>}
 
       {mode === "person" && activeRoutePoint && (

@@ -13,29 +13,17 @@ let dbPath;
 let dbWritable = false;
 let dbInitError = null;
 
-const simplifiedToTraditionalMap = {
-  苏: "蘇",
-  阳: "陽",
-  龙: "龍",
-  刘: "劉",
-  张: "張",
-  赵: "趙",
-  陈: "陳",
-  黄: "黃",
-  国: "國",
-  轼: "軾",
-  藩: "藩",
-  为: "為",
-};
-
+const OpenCC = require("opencc-js");
+const cnToTwConverter = OpenCC.Converter({ from: "cn", to: "tw" });
+const twToCnConverter = OpenCC.Converter({ from: "tw", to: "cn" });
+const cnToHkConverter = OpenCC.Converter({ from: "cn", to: "hk" });
+const hkToCnConverter = OpenCC.Converter({ from: "hk", to: "cn" });
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
-
 function escapeLike(value) {
   return `%${String(value).trim().replace(/\s+/g, "%")}%`;
 }
-
 function toInt(value, fallback = null) {
   const n = Number(value);
   if (!Number.isFinite(n)) {
@@ -43,26 +31,50 @@ function toInt(value, fallback = null) {
   }
   return Math.trunc(n);
 }
-
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
-
-function convertToTraditional(text) {
-  return String(text)
-    .split("")
-    .map((char) => simplifiedToTraditionalMap[char] || char)
-    .join("");
+function safeConvert(converter, text) {
+  try {
+    return converter(String(text || ""));
+  } catch {
+    return String(text || "");
+  }
 }
-
+function buildChineseScriptVariants(text, maxVariants = 20) {
+  const seed = String(text || "");
+  const queue = [seed];
+  const seen = new Set([seed]);
+  while (queue.length > 0 && seen.size < maxVariants) {
+    const current = queue.shift();
+    const candidates = unique([
+      safeConvert(cnToTwConverter, current),
+      safeConvert(cnToHkConverter, current),
+      safeConvert(twToCnConverter, current),
+      safeConvert(hkToCnConverter, current),
+    ]);
+    for (const candidate of candidates) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        queue.push(candidate);
+        if (seen.size >= maxVariants) {
+          break;
+        }
+      }
+    }
+  }
+  return [...seen];
+}
 function buildKeywordVariants(keyword) {
   const trimmed = String(keyword || "").trim();
   if (!trimmed) {
     return [];
   }
-  return unique([trimmed, convertToTraditional(trimmed)]);
+  if (!/[\u4e00-\u9fff]/.test(trimmed)) {
+    return [trimmed];
+  }
+  return unique(buildChineseScriptVariants(trimmed));
 }
-
 function buildAliasKeywordVariants(keywordVariants) {
   const variants = [];
   for (const value of keywordVariants) {
@@ -1096,3 +1108,6 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   closeDb();
 });
+
+
+
