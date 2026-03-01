@@ -143,92 +143,270 @@ function isUnknownStep(step) {
   return step >= 90;
 }
 
-function inferByRelationFallback(relationName) {
-  const relation = String(relationName || "");
-  if (!relation) {
-    return { bucket: "other", generation: 0, directSpouse: false };
-  }
-
-  const tokens = relation
-    .split(/[，,、;；/|]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const text = tokens.join("|");
-  const hasToken = (list) => tokens.some((token) => list.includes(token));
-  const hasPattern = (pattern) => pattern.test(text);
-
-  if (hasPattern(/高祖|曾祖|祖父|祖母|外祖|祖/) || hasPattern(/父|母|伯|叔|舅|姑|姨|翁|岳父|岳母/)) {
-    return { bucket: hasPattern(/父|母|伯|叔|舅|姑|姨|翁|岳父|岳母/) ? "parent" : "ancestor", generation: -1, directSpouse: false };
-  }
-  if (
-    hasToken(["夫", "妻", "丈夫", "妻子", "配偶", "元配", "继室", "繼室"]) ||
-    hasPattern(/妻|丈夫|夫婿|夫君|前夫|後夫|后夫|再婚丈夫|前妻|後妻|后妻|再嫁|第二任妻|第二任丈夫|配偶|婚姻|妾|夫人/)
-  ) {
-    return { bucket: "spouse", generation: 0, directSpouse: true };
-  }
-  if (hasPattern(/孫|孙|曾孫|曾孙|玄孫|玄孙/)) {
-    return { bucket: hasPattern(/孫|孙|外孫|外孙/) ? "grandchild" : "greatGrandchild", generation: 2, directSpouse: false };
-  }
-  if (hasPattern(/子|女|婿|媳/)) {
-    return { bucket: "child", generation: 1, directSpouse: false };
-  }
-  if (hasPattern(/兄|弟|姐|妹|堂|表/)) {
-    return { bucket: "sibling", generation: 0, directSpouse: false };
-  }
-  return { bucket: "other", generation: 0, directSpouse: false };
+function normalizeRelationText(value) {
+  return String(value || "").replace(/\s+/g, "");
 }
 
-function analyzeFamilyByKinship(link) {
+function inferGenderFromRelation(relationName) {
+  const text = normalizeRelationText(relationName);
+  if (!text) {
+    return "unknown";
+  }
+
+  const femaleSignal = /岳母|母|妻|女|姐|妹|姑|姨|婆|嫂|媳|妾|夫人/.test(text);
+  const maleSignal = /岳父|父|夫|子|兄|弟|伯|叔|舅|翁|公|婿/.test(text);
+
+  if (femaleSignal && !maleSignal) {
+    return "female";
+  }
+  if (maleSignal && !femaleSignal) {
+    return "male";
+  }
+  return "unknown";
+}
+
+function analyzeRelationTextSignals(relationName) {
+  const text = normalizeRelationText(relationName);
+  if (!text) {
+    return {
+      spouse: false,
+      wifeCollateral: false,
+      inLawParent: false,
+      ancestor: false,
+      parent: false,
+      sibling: false,
+      child: false,
+      grandchild: false,
+      greatDescendant: false,
+    };
+  }
+
+  const wifeCollateral = /妻[兄弟姐妺妹]|内[兄弟姐妺妹]|內[兄弟姐妺妹]|姻[兄弟姐妺妹]|妻舅|妻姨/.test(text);
+  const spouse =
+    !wifeCollateral &&
+    /配偶|元配|继室|繼室|前妻|后妻|後妻|第二任妻|第二任丈夫|再娶|再婚|丈夫|妻子|夫人|妾|前夫|后夫|後夫|續弦|续弦|^妻$|^夫$/.test(
+      text
+    );
+
+  return {
+    spouse,
+    wifeCollateral,
+    inLawParent: /岳父|岳母|丈人|丈母|公公|婆婆|翁姑|舅姑|^翁$|^姑$/.test(text),
+    ancestor: /高祖|曾祖|祖父|祖母|外祖|太祖|祖/.test(text),
+    parent: /父|母|伯|叔|舅|姑|姨/.test(text),
+    sibling: /兄|弟|姐|妹|堂|表/.test(text),
+    child: /子|女|兒|儿|婿|媳/.test(text),
+    grandchild: /孫|孙/.test(text),
+    greatDescendant: /曾孫|曾孙|玄孫|玄孙|來孫|来孙|晜孫|昆孙/.test(text),
+  };
+}
+
+function analyzeStepSignals(link) {
   const up = toNumericStep(link.upStep);
   const down = toNumericStep(link.downStep);
   const mar = toNumericStep(link.marriageStep) ?? 0;
   const col = toNumericStep(link.collateralStep) ?? 0;
+  const hasStep = !isUnknownStep(up) && !isUnknownStep(down);
+  const generation = hasStep ? down - up : null;
 
-  if (!isUnknownStep(up) && !isUnknownStep(down)) {
-    const generation = down - up;
-    const directSpouse = generation === 0 && mar > 0 && col === 0;
-
-    if (generation <= -2) {
-      return { bucket: "ancestor", generation, directSpouse: false };
-    }
-    if (generation === -1) {
-      return { bucket: "parent", generation, directSpouse: false };
-    }
-    if (generation === 0) {
-      if (directSpouse) {
-        return { bucket: "spouse", generation, directSpouse: true };
-      }
-      if (col > 0 && mar === 0) {
-        return { bucket: "sibling", generation, directSpouse: false };
-      }
-      if (col > 0 && mar > 0) {
-        return { bucket: "sibling", generation, directSpouse: false };
-      }
-      return { bucket: "other", generation, directSpouse: false };
-    }
-    if (generation === 1) {
-      return { bucket: "child", generation, directSpouse: false };
-    }
-    if (generation === 2) {
-      return { bucket: "grandchild", generation, directSpouse: false };
-    }
-    if (generation >= 3) {
-      return { bucket: "greatGrandchild", generation, directSpouse: false };
+  let stepLane = "other";
+  if (Number.isFinite(generation)) {
+    if (generation < 0) {
+      stepLane = "ancestor";
+    } else if (generation > 0) {
+      stepLane = "descendant";
+    } else if (mar > 0 && col === 0) {
+      stepLane = "spouse";
+    } else if (col > 0) {
+      stepLane = "sibling";
     }
   }
 
-  return inferByRelationFallback(link.name);
+  return {
+    up,
+    down,
+    mar,
+    col,
+    hasStep,
+    generation,
+    stepLane,
+  };
 }
 
-function spreadByLine(items, y, spacing) {
-  if (items.length === 0) {
+function classifyFamilyRelation(link) {
+  const relation = String(link.name || "亲属");
+  const textSignals = analyzeRelationTextSignals(relation);
+  const stepSignals = analyzeStepSignals(link);
+  const inferredGender = inferGenderFromRelation(relation);
+
+  let lane = stepSignals.stepLane;
+  let generation = Number.isFinite(stepSignals.generation) ? stepSignals.generation : 0;
+  let relationClass = "other";
+  let relationRank = 90;
+
+  if (textSignals.wifeCollateral) {
+    lane = "sibling";
+    generation = 0;
+    relationClass = "wife_collateral";
+    relationRank = 20;
+  } else if (textSignals.spouse) {
+    lane = "spouse";
+    generation = 0;
+    relationClass = "spouse";
+    relationRank = 10;
+  } else if (textSignals.inLawParent) {
+    lane = "ancestor";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation < 0 ? stepSignals.generation : -1;
+    relationClass = "inlaw_ancestor";
+    relationRank = 16;
+  } else if (textSignals.parent) {
+    lane = "ancestor";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation < 0 ? stepSignals.generation : -1;
+    relationClass = "parent";
+    relationRank = 24;
+  } else if (textSignals.ancestor) {
+    lane = "ancestor";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation < 0 ? stepSignals.generation : -2;
+    relationClass = "ancestor";
+    relationRank = 26;
+  } else if (textSignals.sibling) {
+    lane = "sibling";
+    generation = 0;
+    relationClass = "sibling";
+    relationRank = 30;
+  } else if (textSignals.child) {
+    lane = "descendant";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 1;
+    relationClass = "child";
+    relationRank = 40;
+  } else if (textSignals.greatDescendant) {
+    lane = "descendant";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 3;
+    relationClass = "great_descendant";
+    relationRank = 44;
+  } else if (textSignals.grandchild) {
+    lane = "descendant";
+    generation = Number.isFinite(stepSignals.generation) && stepSignals.generation > 0 ? stepSignals.generation : 2;
+    relationClass = "grandchild";
+    relationRank = 42;
+  } else if (stepSignals.hasStep && stepSignals.stepLane !== "other") {
+    lane = stepSignals.stepLane;
+    relationClass = `step_${lane}`;
+    relationRank = 52;
+  }
+
+  if (lane === "ancestor") {
+    generation = Number.isFinite(generation) ? Math.min(-1, generation) : -1;
+  } else if (lane === "descendant") {
+    generation = Number.isFinite(generation) ? Math.max(1, generation) : 1;
+  } else if (lane === "sibling" || lane === "spouse") {
+    generation = 0;
+  } else {
+    generation = Number.isFinite(generation) ? generation : 0;
+  }
+
+  return {
+    lane,
+    generation,
+    relationClass,
+    relationRank,
+    inferredGender,
+    relation,
+    directSpouse: lane === "spouse",
+    upStep: link.upStep ?? null,
+    downStep: link.downStep ?? null,
+    marriageStep: link.marriageStep ?? null,
+    collateralStep: link.collateralStep ?? null,
+    kinCode: link.kinCode ?? null,
+  };
+}
+
+function compareZhText(left, right) {
+  return String(left || "").localeCompare(String(right || ""), "zh-Hans-CN-u-co-pinyin");
+}
+
+function compareFamilyNodeOrder(left, right) {
+  if (left.generation !== right.generation) {
+    return left.generation - right.generation;
+  }
+  if (left.relationRank !== right.relationRank) {
+    return left.relationRank - right.relationRank;
+  }
+  const relationComp = compareZhText(left.relation, right.relation);
+  if (relationComp !== 0) {
+    return relationComp;
+  }
+  const nameComp = compareZhText(left.name, right.name);
+  if (nameComp !== 0) {
+    return nameComp;
+  }
+  return String(left.id).localeCompare(String(right.id));
+}
+
+function estimateTextWidth(text) {
+  const name = String(text || "");
+  if (!name) {
+    return 72;
+  }
+
+  let unit = 0;
+  for (const char of name) {
+    if (/[\u4e00-\u9fff]/.test(char)) {
+      unit += 1;
+    } else if (/[A-Za-z0-9]/.test(char)) {
+      unit += 0.68;
+    } else {
+      unit += 0.56;
+    }
+  }
+
+  return Math.max(72, Math.round(unit * 21 + 34));
+}
+
+function layoutLayerItems(items, y, gap = 28) {
+  if (!items.length) {
     return [];
   }
-  return items.map((item, index) => ({
-    ...item,
-    x: (index - (items.length - 1) / 2) * spacing,
-    y,
-  }));
+
+  const sorted = [...items].sort(compareFamilyNodeOrder);
+  const widths = sorted.map((item) => estimateTextWidth(item.name));
+  const totalWidth = widths.reduce((acc, value) => acc + value, 0) + (sorted.length - 1) * gap;
+  let cursor = -totalWidth / 2;
+
+  return sorted.map((item, index) => {
+    const width = widths[index];
+    const x = cursor + width / 2;
+    cursor += width + gap;
+    return {
+      ...item,
+      x: Math.round(x),
+      y,
+    };
+  });
+}
+
+function layoutSideLaneItems(items, lane) {
+  if (!items.length) {
+    return [];
+  }
+
+  const sorted = [...items].sort(compareFamilyNodeOrder);
+  const widths = sorted.map((item) => estimateTextWidth(item.name));
+  const startOffset = 240;
+  const horizontalGap = 34;
+  let cursor = startOffset;
+
+  return sorted.map((item, index) => {
+    const width = widths[index];
+    const center = cursor + width / 2;
+    const x = lane === "spouse" ? -Math.round(center) : Math.round(center);
+    cursor += width + horizontalGap;
+    return {
+      ...item,
+      x,
+      y: 0,
+    };
+  });
 }
 
 const malePalette = ["#1f3f67", "#27517b", "#316492", "#3f79a8", "#5291ba", "#73aad0", "#97c2df", "#bdd9ee"];
@@ -282,9 +460,11 @@ function normalizeGender(female) {
   return "unknown";
 }
 
-function nodeColorByGenderAndGeneration(female, generation, fallbackColor) {
+function nodeColorByGenderAndGeneration(female, generation, fallbackColor, inferredGender = "unknown") {
   const index = paletteIndexByGeneration(generation);
-  const gender = normalizeGender(female);
+  const explicitGender = normalizeGender(female);
+  const gender = explicitGender === "unknown" ? inferredGender : explicitGender;
+
   if (gender === "male") {
     return malePalette[index];
   }
@@ -294,19 +474,87 @@ function nodeColorByGenderAndGeneration(female, generation, fallbackColor) {
   return fallbackColor || unknownPalette[index];
 }
 
-function buildBucketNodes(items, options) {
-  const laid = spreadByLine(items, options.y, options.spacing).map((item) => ({
-    ...item,
-    x: item.x + (options.xShift || 0),
-    category: options.category,
-    symbol: options.symbol,
-    symbolSize: options.symbolSize,
-    value: item.name,
-    itemStyle: {
-      color: nodeColorByGenderAndGeneration(item.female, item.generation, options.color),
-    },
-  }));
-  return laid;
+const laneColorMap = {
+  ancestor: "#4f6074",
+  spouse: "#9b6a32",
+  sibling: "#756592",
+  descendant: "#2f7c5a",
+  other: "#7e6a55",
+};
+
+function symbolByLane(lane) {
+  if (lane === "ancestor") {
+    return "rect";
+  }
+  if (lane === "spouse") {
+    return "diamond";
+  }
+  if (lane === "descendant") {
+    return "triangle";
+  }
+  if (lane === "sibling") {
+    return "circle";
+  }
+  return "roundRect";
+}
+
+function symbolSizeByLane(lane, generation) {
+  if (lane === "spouse") {
+    return 34;
+  }
+  if (lane === "ancestor") {
+    return generation <= -3 ? 28 : 32;
+  }
+  if (lane === "descendant") {
+    if (generation >= 3) {
+      return 26;
+    }
+    if (generation === 2) {
+      return 30;
+    }
+    return 34;
+  }
+  if (lane === "sibling") {
+    return 29;
+  }
+  return 24;
+}
+
+function computeLayerY(lane, generation) {
+  const generationGap = 300;
+  if (lane === "spouse") {
+    return 0;
+  }
+  if (lane === "sibling") {
+    return 0;
+  }
+  return generation * generationGap;
+}
+
+function computeRailY(nodeY, lane) {
+  if (lane === "ancestor" || lane === "descendant") {
+    return Math.round(nodeY * 0.62);
+  }
+  if (lane === "spouse" || lane === "sibling") {
+    return Math.round(nodeY * 0.82);
+  }
+  return Math.round(nodeY * 0.62);
+}
+
+function computeLabelPosition(lane, x) {
+  if (lane === "spouse") {
+    return "top";
+  }
+  if (lane === "sibling") {
+    return "bottom";
+  }
+  if (lane === "ancestor") {
+    return "top";
+  }
+  if (lane === "descendant") {
+    return "bottom";
+  }
+  return x >= 0 ? "right" : "left";
 }
 
 function buildFamilyTreeGraph(graph) {
@@ -319,15 +567,21 @@ function buildFamilyTreeGraph(graph) {
   const nodeById = new Map(graph.nodes.map((node) => [String(node.id), node]));
   const familyLinks = graph.links.filter((link) => link.relationType === "family");
 
-  const bucketWeight = {
-    spouse: 120,
-    parent: 110,
-    child: 110,
-    ancestor: 100,
+  const classWeight = {
+    spouse: 130,
+    wife_collateral: 120,
+    inlaw_ancestor: 118,
+    parent: 112,
+    ancestor: 108,
+    sibling: 105,
+    child: 102,
     grandchild: 100,
-    greatGrandchild: 95,
-    sibling: 90,
-    other: 20,
+    great_descendant: 98,
+    step_ancestor: 90,
+    step_descendant: 88,
+    step_sibling: 84,
+    step_spouse: 82,
+    other: 10,
   };
 
   const relativesMap = new Map();
@@ -336,24 +590,29 @@ function buildFamilyTreeGraph(graph) {
     if (!targetId || targetId === rootId) {
       continue;
     }
+
     const node = nodeById.get(targetId);
-    const analyzed = analyzeFamilyByKinship(link);
+    const analyzed = classifyFamilyRelation(link);
     const candidate = {
       id: targetId,
       name: node?.name || `人物 ${targetId}`,
       female: node?.female ?? null,
-      relation: link.name || "亲属",
-      bucket: analyzed.bucket,
+      relation: analyzed.relation,
+      lane: analyzed.lane,
       generation: analyzed.generation,
+      relationClass: analyzed.relationClass,
+      relationRank: analyzed.relationRank,
+      inferredGender: analyzed.inferredGender,
       directSpouse: analyzed.directSpouse,
-      upStep: link.upStep ?? null,
-      downStep: link.downStep ?? null,
-      marriageStep: link.marriageStep ?? null,
-      collateralStep: link.collateralStep ?? null,
-      kinCode: link.kinCode ?? null,
+      upStep: analyzed.upStep,
+      downStep: analyzed.downStep,
+      marriageStep: analyzed.marriageStep,
+      collateralStep: analyzed.collateralStep,
+      kinCode: analyzed.kinCode,
     };
+
     const score =
-      (bucketWeight[candidate.bucket] || 0) +
+      (classWeight[candidate.relationClass] || classWeight.other) +
       (Number.isFinite(candidate.generation) ? 12 - Math.min(10, Math.abs(candidate.generation)) : 0) +
       (candidate.directSpouse ? 25 : 0);
     candidate._score = score;
@@ -362,24 +621,6 @@ function buildFamilyTreeGraph(graph) {
     if (!existing || candidate._score > existing._score) {
       relativesMap.set(targetId, candidate);
     }
-  }
-
-  const groups = {
-    ancestor: [],
-    parent: [],
-    spouse: [],
-    sibling: [],
-    child: [],
-    grandchild: [],
-    greatGrandchild: [],
-    other: [],
-  };
-  for (const relative of relativesMap.values()) {
-    if (!groups[relative.bucket]) {
-      groups.other.push(relative);
-      continue;
-    }
-    groups[relative.bucket].push(relative);
   }
 
   const root = {
@@ -392,133 +633,104 @@ function buildFamilyTreeGraph(graph) {
     x: 0,
     y: 0,
     value: rootNode.name,
+    label: {
+      show: true,
+      position: "inside",
+      color: "#fffdf8",
+    },
     itemStyle: {
       color: nodeColorByGenderAndGeneration(rootNode.female, 0, "#c7512f"),
     },
   };
 
-  const ancestorNodes = buildBucketNodes(groups.ancestor, {
-    y: -360,
-    spacing: 180,
-    xShift: 0,
-    category: 1,
-    symbol: "rect",
-    symbolSize: 32,
-    color: "#4f6074",
-  });
+  const layerMap = new Map();
+  for (const relative of relativesMap.values()) {
+    const layerKey = `${relative.lane}:${relative.generation}`;
+    if (!layerMap.has(layerKey)) {
+      layerMap.set(layerKey, []);
+    }
+    layerMap.get(layerKey).push(relative);
+  }
 
-  const parentNodes = buildBucketNodes(groups.parent, {
-    y: -190,
-    spacing: 170,
-    xShift: 0,
-    category: 2,
-    symbol: "rect",
-    symbolSize: 34,
-    color: "#60788d",
-  });
+  const categoryByLane = {
+    ancestor: 1,
+    spouse: 2,
+    sibling: 3,
+    descendant: 4,
+    other: 5,
+  };
 
-  const spouseNodes = buildBucketNodes(groups.spouse, {
-    y: -58,
-    spacing: 220,
-    xShift: 0,
-    category: 3,
-    symbol: "diamond",
-    symbolSize: 34,
-    color: "#a36b2d",
-  }).map((item) => ({
-    ...item,
-    x: item.x >= 0 ? item.x + 260 : item.x - 260 || -260,
+  const placedRelatives = [];
+  for (const [key, items] of layerMap.entries()) {
+    const [lane, generationText] = key.split(":");
+    const generation = Number(generationText);
+    const y = computeLayerY(lane, generation);
+    const laid =
+      lane === "spouse" || lane === "sibling"
+        ? layoutSideLaneItems(items, lane)
+        : layoutLayerItems(items, y, 28);
+
+    for (const item of laid) {
+      placedRelatives.push({
+        ...item,
+        lane,
+        generation,
+      });
+    }
+  }
+
+  const relativeNodes = placedRelatives.map((item) => ({
+    id: item.id,
+    name: item.name,
+    value: item.name,
+    female: item.female,
+    relation: item.relation,
+    lane: item.lane,
+    generation: item.generation,
+    relationClass: item.relationClass,
+    category: categoryByLane[item.lane] ?? categoryByLane.other,
+    symbol: symbolByLane(item.lane),
+    symbolSize: symbolSizeByLane(item.lane, item.generation),
+    x: item.x,
+    y: item.y,
     label: {
       show: true,
-      position: "top",
+      position: computeLabelPosition(item.lane, item.x),
+      distance: 10,
       color: "#211a12",
+    },
+    itemStyle: {
+      color: nodeColorByGenderAndGeneration(
+        item.female,
+        item.generation,
+        laneColorMap[item.lane] || laneColorMap.other,
+        item.inferredGender
+      ),
     },
   }));
 
-  const siblingNodes = buildBucketNodes(groups.sibling, {
-    y: 62,
-    spacing: 170,
-    xShift: 0,
-    category: 4,
-    symbol: "circle",
-    symbolSize: 28,
-    color: "#756592",
-  }).map((item) => ({
-    ...item,
-    x: item.x >= 0 ? item.x + 470 : item.x - 470 || -470,
-    label: {
-      show: true,
-      position: item.x >= 0 ? "right" : "left",
-      color: "#211a12",
-    },
-  }));
-
-  const childNodes = buildBucketNodes(groups.child, {
-    y: 200,
-    spacing: 170,
-    xShift: 0,
-    category: 5,
-    symbol: "triangle",
-    symbolSize: 34,
-    color: "#2f7c5a",
-  });
-
-  const grandchildNodes = buildBucketNodes(groups.grandchild, {
-    y: 360,
-    spacing: 170,
-    xShift: 0,
-    category: 6,
-    symbol: "triangle",
-    symbolSize: 30,
-    color: "#3f8f66",
-  });
-
-  const greatGrandchildNodes = buildBucketNodes(groups.greatGrandchild, {
-    y: 510,
-    spacing: 160,
-    xShift: 0,
-    category: 7,
-    symbol: "triangle",
-    symbolSize: 26,
-    color: "#51a879",
-  });
-
-  const otherNodes = buildBucketNodes(groups.other, {
-    y: 620,
-    spacing: 165,
-    xShift: 0,
-    category: 8,
-    symbol: "roundRect",
-    symbolSize: 24,
-    color: "#7e6a55",
-  });
-
-  const nodes = [
-    root,
-    ...ancestorNodes,
-    ...parentNodes,
-    ...spouseNodes,
-    ...siblingNodes,
-    ...childNodes,
-    ...grandchildNodes,
-    ...greatGrandchildNodes,
-    ...otherNodes,
-  ];
+  const nodes = [root, ...relativeNodes];
   const helperNodes = [];
   const links = [];
+  const pathByNodeId = {};
   let helperCounter = 0;
   let railCounter = 0;
 
-  const createRail = (y, color, relationType) => {
-    const railId = `__family_rail_${railCounter}`;
+  const createRail = (y, lane, generation) => {
+    const color = laneColorMap[lane] || laneColorMap.other;
+    const railNo = railCounter;
+    const railId = `__family_rail_${railNo}`;
+    const rootEdgeId = `__family_edge_root_rail_${railNo}`;
     railCounter += 1;
+
     helperNodes.push({
       id: railId,
       name: "",
       value: "",
+      isHelper: true,
       x: 0,
       y,
-      category: 8,
+      category: 6,
       symbolSize: 1,
       fixed: true,
       draggable: false,
@@ -527,29 +739,41 @@ function buildFamilyTreeGraph(graph) {
       tooltip: { show: false },
       emphasis: { disabled: true },
     });
+
     links.push({
+      id: rootEdgeId,
       source: rootId,
       target: railId,
-      relationType: "helper",
+      relationType: `${lane}_rail`,
+      relativeId: null,
+      railId,
+      generation,
       name: "",
       value: "",
       lineStyle: { color, width: 1.8, opacity: 0.78 },
+      showRelationLabel: false,
       label: { show: false },
       tooltip: { show: false },
     });
-    return { id: railId, y, color, relationType };
+
+    return { id: railId, y, color, lane, generation, rootEdgeId };
   };
 
   const connectViaRail = (rail, item, lineStyle) => {
-    const elbowId = `__family_elbow_${helperCounter}`;
+    const elbowNo = helperCounter;
+    const elbowId = `__family_elbow_${elbowNo}`;
+    const railToElbowEdgeId = `__family_edge_rail_elbow_${elbowNo}`;
+    const elbowToNodeEdgeId = `__family_edge_elbow_node_${elbowNo}`;
     helperCounter += 1;
+
     helperNodes.push({
       id: elbowId,
       name: "",
       value: "",
+      isHelper: true,
       x: item.x,
       y: rail.y,
-      category: 8,
+      category: 6,
       symbolSize: 1,
       fixed: true,
       draggable: false,
@@ -558,84 +782,188 @@ function buildFamilyTreeGraph(graph) {
       tooltip: { show: false },
       emphasis: { disabled: true },
     });
+
     links.push({
+      id: railToElbowEdgeId,
       source: rail.id,
       target: elbowId,
-      relationType: rail.relationType,
+      relationType: item.relationClass,
+      relativeId: item.id,
+      railId: rail.id,
       name: item.relation,
       value: item.relation,
       lineStyle: { ...lineStyle, opacity: 0.72 },
+      showRelationLabel: true,
       label: { show: true },
     });
+
     links.push({
+      id: elbowToNodeEdgeId,
       source: elbowId,
       target: item.id,
-      relationType: "helper",
+      relationType: `${item.relationClass}_drop`,
+      relativeId: item.id,
+      railId: rail.id,
       name: "",
       value: "",
       lineStyle: { ...lineStyle, opacity: 0.72 },
+      showRelationLabel: false,
       label: { show: false },
       tooltip: { show: false },
     });
+
+    pathByNodeId[item.id] = {
+      nodeIds: [rootId, rail.id, elbowId, item.id],
+      edgeIds: [rail.rootEdgeId, railToElbowEdgeId, elbowToNodeEdgeId],
+    };
   };
 
-  const connectGroupByRail = (items, railY, color, relationType, style) => {
+  const createSideHub = (lane, generation) => {
+    const color = laneColorMap[lane] || laneColorMap.other;
+    const hubNo = railCounter;
+    const hubId = `__family_side_hub_${hubNo}`;
+    const rootEdgeId = `__family_edge_root_side_hub_${hubNo}`;
+    railCounter += 1;
+
+    helperNodes.push({
+      id: hubId,
+      name: "",
+      value: "",
+      isHelper: true,
+      x: lane === "spouse" ? -150 : 150,
+      y: 0,
+      category: 6,
+      symbolSize: 1,
+      fixed: true,
+      draggable: false,
+      label: { show: false },
+      itemStyle: { opacity: 0 },
+      tooltip: { show: false },
+      emphasis: { disabled: true },
+    });
+
+    links.push({
+      id: rootEdgeId,
+      source: rootId,
+      target: hubId,
+      relationType: `${lane}_side_hub`,
+      relativeId: null,
+      railId: hubId,
+      generation,
+      name: "",
+      value: "",
+      lineStyle: { color, width: 2.0, opacity: 0.82, type: lane === "spouse" ? "dashed" : "dotted" },
+      showRelationLabel: false,
+      label: { show: false },
+      tooltip: { show: false },
+    });
+
+    return { id: hubId, color, lane, generation, rootEdgeId };
+  };
+
+  const connectViaSideHub = (hub, item, lineStyle) => {
+    const hubToNodeEdgeId = `__family_edge_side_hub_node_${helperCounter}`;
+    helperCounter += 1;
+
+    links.push({
+      id: hubToNodeEdgeId,
+      source: hub.id,
+      target: item.id,
+      relationType: item.relationClass,
+      relativeId: item.id,
+      railId: hub.id,
+      name: item.relation,
+      value: item.relation,
+      lineStyle: { ...lineStyle, opacity: 0.8 },
+      showRelationLabel: true,
+      label: { show: true },
+    });
+
+    pathByNodeId[item.id] = {
+      nodeIds: [rootId, hub.id, item.id],
+      edgeIds: [hub.rootEdgeId, hubToNodeEdgeId],
+    };
+  };
+
+  const connectGroupByRail = (items, lane, generation) => {
     if (!items.length) {
       return;
     }
-    const rail = createRail(railY, color, relationType);
+
+    const laneStyle =
+      lane === "spouse"
+        ? { width: 2.3, type: "dashed" }
+        : lane === "sibling"
+          ? { width: 1.8, type: "dotted" }
+          : lane === "ancestor"
+            ? { width: 2.1, type: "solid" }
+            : lane === "descendant"
+              ? { width: 2.05, type: "solid" }
+              : { width: 1.6, type: "dotted" };
+
+    if (lane === "spouse" || lane === "sibling") {
+      const hub = createSideHub(lane, generation);
+      for (const item of items) {
+        connectViaSideHub(hub, item, {
+          color: hub.color,
+          width: laneStyle.width,
+          type: laneStyle.type,
+        });
+      }
+      return;
+    }
+
+    const railY = computeRailY(items[0].y, lane);
+    const rail = createRail(railY, lane, generation);
     for (const item of items) {
       connectViaRail(rail, item, {
-        color,
-        width: style.width,
-        type: style.type || "solid",
+        color: rail.color,
+        width: laneStyle.width,
+        type: laneStyle.type,
       });
     }
   };
 
-  connectGroupByRail(ancestorNodes, -280, "#4f6074", "ancestor", { width: 2.1 });
-  connectGroupByRail(parentNodes, -130, "#60788d", "parent", { width: 2.2 });
-
-  for (const item of spouseNodes) {
-    links.push({
-      source: rootId,
-      target: item.id,
-      name: item.relation,
-      value: item.relation,
-      relationType: "spouse",
-      lineStyle: { color: "#9b6a32", width: 2.3, type: "dashed" },
-    });
-  }
-  for (const item of siblingNodes) {
-    links.push({
-      source: rootId,
-      target: item.id,
-      name: item.relation,
-      value: item.relation,
-      relationType: "sibling",
-      lineStyle: { color: "#756592", width: 1.6, type: "dotted" },
-    });
+  const railGroups = new Map();
+  for (const item of placedRelatives) {
+    const key = `${item.lane}:${item.generation}`;
+    if (!railGroups.has(key)) {
+      railGroups.set(key, []);
+    }
+    railGroups.get(key).push(item);
   }
 
-  connectGroupByRail(childNodes, 120, "#2f7c5a", "child", { width: 2.2 });
-  connectGroupByRail(grandchildNodes, 290, "#3f8f66", "grandchild", { width: 2.0 });
-  connectGroupByRail(greatGrandchildNodes, 450, "#51a879", "greatGrandchild", { width: 1.9 });
-  connectGroupByRail(otherNodes, 560, "#7e7367", "other", { width: 1.5, type: "dotted" });
+  const sortedRailEntries = Array.from(railGroups.entries()).sort(([leftKey], [rightKey]) => {
+    const [leftLane, leftGenerationText] = leftKey.split(":");
+    const [rightLane, rightGenerationText] = rightKey.split(":");
+    const leftGeneration = Number(leftGenerationText);
+    const rightGeneration = Number(rightGenerationText);
+
+    if (leftGeneration !== rightGeneration) {
+      return leftGeneration - rightGeneration;
+    }
+    return leftLane.localeCompare(rightLane);
+  });
+
+  for (const [key, items] of sortedRailEntries) {
+    const [lane, generationText] = key.split(":");
+    connectGroupByRail(items, lane, Number(generationText));
+  }
 
   return {
     nodes: [...nodes, ...helperNodes],
     links,
     categories: [
       { name: "核心人物" },
-      { name: "祖辈" },
-      { name: "父辈" },
-      { name: "配偶" },
-      { name: "同辈" },
-      { name: "子辈" },
-      { name: "孙辈" },
-      { name: "曾孙及下" },
+      { name: "上代" },
+      { name: "配偶车道" },
+      { name: "兄弟姐妹车道" },
+      { name: "下代" },
       { name: "其他" },
+      { name: "辅助结构" },
     ],
+    legendCategories: ["核心人物", "上代", "配偶车道", "兄弟姐妹车道", "下代", "其他"],
+    pathByNodeId,
   };
 }
 
@@ -647,6 +975,7 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
   const [viewMode, setViewMode] = useState("network");
   const [nodeJumpLoading, setNodeJumpLoading] = useState(false);
   const [visitHistory, setVisitHistory] = useState({ items: [], index: -1 });
+  const [activeFamilyPath, setActiveFamilyPath] = useState({ nodeIds: [], edgeIds: [] });
   const historyNavRef = useRef(false);
 
   useEffect(() => {
@@ -775,7 +1104,11 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       }
       const clicked = params.data || {};
       const nodeIdText = String(clicked.id || "").trim();
-      if (!nodeIdText || nodeIdText.startsWith("__center_anchor_")) {
+      if (
+        !nodeIdText ||
+        nodeIdText.startsWith("__center_anchor_") ||
+        nodeIdText.startsWith("__family_")
+      ) {
         return;
       }
 
@@ -804,26 +1137,199 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
     [onNavigatePerson]
   );
 
+  const familyTreeGraph = useMemo(() => {
+    if (viewMode !== "familyTree") {
+      return null;
+    }
+    return buildFamilyTreeGraph(graph);
+  }, [graph, viewMode]);
+
+  const clearFamilyPathHighlight = useCallback(() => {
+    setActiveFamilyPath((prev) => {
+      if (!prev.nodeIds.length && !prev.edgeIds.length) {
+        return prev;
+      }
+      return { nodeIds: [], edgeIds: [] };
+    });
+  }, []);
+
+  const setFamilyPathByNodeId = useCallback(
+    (nodeId) => {
+      if (!familyTreeGraph) {
+        return;
+      }
+      const path = familyTreeGraph.pathByNodeId?.[String(nodeId)];
+      if (!path) {
+        clearFamilyPathHighlight();
+        return;
+      }
+
+      const nextNodeIds = path.nodeIds.map((id) => String(id));
+      const nextEdgeIds = path.edgeIds.map((id) => String(id));
+      setActiveFamilyPath((prev) => {
+        const sameNodes =
+          prev.nodeIds.length === nextNodeIds.length &&
+          prev.nodeIds.every((id, index) => id === nextNodeIds[index]);
+        const sameEdges =
+          prev.edgeIds.length === nextEdgeIds.length &&
+          prev.edgeIds.every((id, index) => id === nextEdgeIds[index]);
+        if (sameNodes && sameEdges) {
+          return prev;
+        }
+        return { nodeIds: nextNodeIds, edgeIds: nextEdgeIds };
+      });
+    },
+    [clearFamilyPathHighlight, familyTreeGraph]
+  );
+
+  const handleFamilyTreeMouseOver = useCallback(
+    (params) => {
+      if (viewMode !== "familyTree") {
+        return;
+      }
+      if (params?.dataType !== "node") {
+        return;
+      }
+
+      const nodeIdText = String(params.data?.id || "").trim();
+      if (
+        !nodeIdText ||
+        nodeIdText === String(graph.rootId || "") ||
+        nodeIdText.startsWith("__family_") ||
+        nodeIdText.startsWith("__center_anchor_")
+      ) {
+        clearFamilyPathHighlight();
+        return;
+      }
+      setFamilyPathByNodeId(nodeIdText);
+    },
+    [clearFamilyPathHighlight, graph.rootId, setFamilyPathByNodeId, viewMode]
+  );
+
+  const handleFamilyTreeGlobalOut = useCallback(() => {
+    if (viewMode !== "familyTree") {
+      return;
+    }
+    clearFamilyPathHighlight();
+  }, [clearFamilyPathHighlight, viewMode]);
+
+  const handleFamilyTreeMouseOut = useCallback(
+    (params) => {
+      if (viewMode !== "familyTree") {
+        return;
+      }
+      if (params?.dataType === "node") {
+        clearFamilyPathHighlight();
+      }
+    },
+    [clearFamilyPathHighlight, viewMode]
+  );
+
+  useEffect(() => {
+    clearFamilyPathHighlight();
+  }, [clearFamilyPathHighlight, familyTreeGraph, graph.rootId, viewMode]);
+
   const chartOption = useMemo(() => {
     if (viewMode === "familyTree") {
-      const treeGraph = buildFamilyTreeGraph(graph);
+      const treeGraph = familyTreeGraph;
       if (!treeGraph) {
         return null;
       }
+
+      const activeNodeSet = new Set((activeFamilyPath.nodeIds || []).map((id) => String(id)));
+      const activeEdgeSet = new Set((activeFamilyPath.edgeIds || []).map((id) => String(id)));
+      const hasActivePath = activeNodeSet.size > 0 && activeEdgeSet.size > 0;
+
+      const renderNodes = treeGraph.nodes.map((node) => {
+        const nodeId = String(node.id);
+        const inPath = hasActivePath ? activeNodeSet.has(nodeId) : false;
+        const isHelper = Boolean(node.isHelper);
+
+        const nextItemStyle = {
+          ...(node.itemStyle || {}),
+        };
+        const nextLabel = {
+          ...(node.label || {}),
+        };
+
+        if (isHelper) {
+          nextItemStyle.opacity = 0;
+          nextLabel.show = false;
+        } else if (hasActivePath) {
+          nextItemStyle.opacity = inPath ? 1 : 0.18;
+          if (inPath) {
+            nextItemStyle.shadowBlur = 14;
+            nextItemStyle.shadowColor = "rgba(40, 28, 19, 0.35)";
+          }
+          nextLabel.show = inPath;
+          nextLabel.opacity = inPath ? 1 : 0;
+        } else {
+          nextItemStyle.opacity = 1;
+          nextLabel.show = true;
+          nextLabel.opacity = 1;
+        }
+
+        return {
+          ...node,
+          itemStyle: nextItemStyle,
+          label: nextLabel,
+        };
+      });
+
+      const renderLinks = treeGraph.links.map((link) => {
+        const linkId = String(link.id || "");
+        const inPath = hasActivePath ? activeEdgeSet.has(linkId) : false;
+        const isRelationEdge = Boolean(link.name);
+
+        const baseLineStyle = {
+          ...(link.lineStyle || {}),
+        };
+        const baseLabel = {
+          ...(link.label || {}),
+        };
+
+        let showRelationLabel = Boolean(link.showRelationLabel);
+        if (hasActivePath) {
+          if (inPath) {
+            baseLineStyle.opacity = 1;
+            baseLineStyle.width = Math.max(3.8, Number(baseLineStyle.width || 1.8));
+          } else {
+            baseLineStyle.opacity = 0.08;
+            baseLineStyle.width = Math.min(1.2, Number(baseLineStyle.width || 1.2));
+          }
+          showRelationLabel = inPath && isRelationEdge;
+        }
+
+        baseLabel.show = showRelationLabel;
+        baseLabel.opacity = showRelationLabel ? 1 : 0;
+        baseLabel.color = showRelationLabel ? "#4b443b" : "#8a8175";
+
+        return {
+          ...link,
+          showRelationLabel,
+          lineStyle: baseLineStyle,
+          label: baseLabel,
+        };
+      });
 
       return {
         backgroundColor: "transparent",
         tooltip: {
           formatter: (params) => {
             if (params.dataType === "edge") {
-              return params.data?.name || "亲属关系";
+              return params.data?.showRelationLabel ? params.data?.name || "亲属关系" : "";
             }
-            return params.data?.name || "";
+            const name = params.data?.name || "";
+            const relation = params.data?.relation;
+            if (relation) {
+              return `${name}<br/>关系：${relation}`;
+            }
+            return name;
           },
         },
         legend: [
           {
-            data: treeGraph.categories.map((c) => c.name),
+            data: treeGraph.legendCategories || treeGraph.categories.map((c) => c.name),
             top: 6,
             textStyle: { color: "#3f3b35" },
           },
@@ -832,14 +1338,15 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
           {
             type: "graph",
             layout: "none",
-            data: treeGraph.nodes,
-            links: treeGraph.links,
+            data: renderNodes,
+            links: renderLinks,
             categories: treeGraph.categories,
             roam: true,
             draggable: false,
             edgeLabel: {
               show: true,
-              formatter: (params) => params.data?.name || params.data?.value || "关系",
+              formatter: (params) =>
+                params.data?.showRelationLabel ? params.data?.name || params.data?.value || "关系" : "",
               rotate: 0,
               position: "middle",
               distance: 6,
@@ -854,13 +1361,13 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
             },
             lineStyle: {
               color: "#8e7f6d",
-              opacity: 0.88,
-              width: 1.7,
+              opacity: 0.7,
+              width: 1.6,
               curveness: 0,
             },
             emphasis: {
-              focus: "adjacency",
-              lineStyle: { width: 3 },
+              focus: "none",
+              lineStyle: { width: 4.4, opacity: 1 },
             },
           },
         ],
@@ -972,7 +1479,17 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       ],
       color: ["#c7512f", "#1f7a8c", "#9d6b1a"],
     };
-  }, [dynamicLayout, graph, viewMode]);
+  }, [activeFamilyPath, dynamicLayout, familyTreeGraph, graph, viewMode]);
+
+  const chartEvents = useMemo(
+    () => ({
+      dblclick: handleNodeDoubleClick,
+      mouseover: handleFamilyTreeMouseOver,
+      mouseout: handleFamilyTreeMouseOut,
+      globalout: handleFamilyTreeGlobalOut,
+    }),
+    [handleFamilyTreeGlobalOut, handleFamilyTreeMouseOut, handleFamilyTreeMouseOver, handleNodeDoubleClick]
+  );
 
   if (!selectedPerson?.id) {
     return <div className="panel muted">请先在“人物检索”中选择人物，再查看关系图谱。</div>;
@@ -1030,7 +1547,7 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       )}
       {viewMode === "familyTree" && (
         <p className="subtle">
-          家谱按“祖辈 → 父辈 → 核心人物 → 子辈 → 孙辈 → 曾孙及下”纵向分层；配偶为菱形标记，子孙为三角标记。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
+          家谱按代际纵向分层（上代/核心/下代），配偶与兄弟姐妹改为核心同代左右“水平分支树”（左配偶树、右同辈树），并采用“总线+折线/侧向分支”连接。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
         </p>
       )}
 
@@ -1041,8 +1558,8 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       {!loading && graph.nodes.length > 0 && chartOption && (
         <ReactECharts
           option={chartOption}
-          style={{ height: "680px", width: "100%" }}
-          onEvents={{ dblclick: handleNodeDoubleClick }}
+          style={{ height: "700px", width: "100%" }}
+          onEvents={chartEvents}
         />
       )}
     </section>
