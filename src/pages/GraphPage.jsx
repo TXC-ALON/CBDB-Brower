@@ -694,9 +694,8 @@ function buildFamilyTreeGraph(graph) {
     x: item.x,
     y: item.y,
     label: {
-      show: true,
-      position: computeLabelPosition(item.lane, item.x),
-      distance: 10,
+      show: false,
+      position: "top",
       color: "#211a12",
     },
     itemStyle: {
@@ -709,7 +708,67 @@ function buildFamilyTreeGraph(graph) {
     },
   }));
 
-  const nodes = [root, ...relativeNodes];
+  const compositeLabelNodes = [];
+  for (const item of relativeNodes) {
+    const nameOffset = Math.max(40, Number(item.symbolSize || 28) + 8);
+    const relationOffset = Math.max(48, Number(item.symbolSize || 28) + 15);
+
+    // compositeLabelNodes.push({
+    //   id: `__family_name_label_${item.id}`,
+    //   name: "",
+    //   value: item.name,
+    //   ownerId: item.id,
+    //   relation: item.relation,
+    //   isLabelNode: true,
+    //   labelKind: "name",
+    //   x: item.x,
+    //   y: item.y - nameOffset,
+    //   category: item.category,
+    //   symbolSize: 1,
+    //   fixed: true,
+    //   silent: true,
+    //   draggable: false,
+    //   itemStyle: { opacity: 0 },
+    //   tooltip: { show: false },
+    //   emphasis: { disabled: true },
+    //   label: {
+    //     show: true,
+    //     position: "inside",
+    //     color: "#211a12",
+    //     formatter: item.name,
+    //     fontSize: 13,
+    //   },
+    // });
+
+    compositeLabelNodes.push({
+      id: `__family_relation_label_${item.id}`,
+      name: "",
+      value: item.relation,
+      ownerId: item.id,
+      relation: item.relation,
+      isLabelNode: true,
+      labelKind: "relation",
+      x: item.x,
+      y: item.y + relationOffset,
+      category: item.category,
+      symbolSize: 1,
+      fixed: true,
+      silent: true,
+      draggable: false,
+      itemStyle: { opacity: 0 },
+      tooltip: { show: false },
+      emphasis: { disabled: true },
+      label: {
+        show: true,
+        position: "inside",
+        color: "#6a6052",
+        formatter: item.relation,
+        fontSize: 12,
+      },
+    });
+  }
+
+  const nodes = [root, ...relativeNodes, ...compositeLabelNodes];
   const helperNodes = [];
   const links = [];
   const pathByNodeId = {};
@@ -793,8 +852,8 @@ function buildFamilyTreeGraph(graph) {
       name: item.relation,
       value: item.relation,
       lineStyle: { ...lineStyle, opacity: 0.72 },
-      showRelationLabel: true,
-      label: { show: true },
+      showRelationLabel: false,
+      label: { show: false },
     });
 
     links.push({
@@ -875,8 +934,8 @@ function buildFamilyTreeGraph(graph) {
       name: item.relation,
       value: item.relation,
       lineStyle: { ...lineStyle, opacity: 0.8 },
-      showRelationLabel: true,
-      label: { show: true },
+      showRelationLabel: false,
+      label: { show: false },
     });
 
     pathByNodeId[item.id] = {
@@ -1242,8 +1301,10 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
 
       const renderNodes = treeGraph.nodes.map((node) => {
         const nodeId = String(node.id);
-        const inPath = hasActivePath ? activeNodeSet.has(nodeId) : false;
+        const ownerId = node.ownerId ? String(node.ownerId) : "";
+        const inPath = hasActivePath ? activeNodeSet.has(nodeId) || (ownerId && activeNodeSet.has(ownerId)) : false;
         const isHelper = Boolean(node.isHelper);
+        const isLabelNode = Boolean(node.isLabelNode);
 
         const nextItemStyle = {
           ...(node.itemStyle || {}),
@@ -1255,6 +1316,15 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
         if (isHelper) {
           nextItemStyle.opacity = 0;
           nextLabel.show = false;
+        } else if (isLabelNode) {
+          nextItemStyle.opacity = 0;
+          if (hasActivePath) {
+            nextLabel.show = inPath;
+            nextLabel.opacity = inPath ? 1 : 0;
+          } else {
+            nextLabel.show = true;
+            nextLabel.opacity = 1;
+          }
         } else if (hasActivePath) {
           nextItemStyle.opacity = inPath ? 1 : 0.18;
           if (inPath) {
@@ -1279,7 +1349,6 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       const renderLinks = treeGraph.links.map((link) => {
         const linkId = String(link.id || "");
         const inPath = hasActivePath ? activeEdgeSet.has(linkId) : false;
-        const isRelationEdge = Boolean(link.name);
 
         const baseLineStyle = {
           ...(link.lineStyle || {}),
@@ -1288,7 +1357,7 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
           ...(link.label || {}),
         };
 
-        let showRelationLabel = Boolean(link.showRelationLabel);
+        const showRelationLabel = false;
         if (hasActivePath) {
           if (inPath) {
             baseLineStyle.opacity = 1;
@@ -1297,12 +1366,10 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
             baseLineStyle.opacity = 0.08;
             baseLineStyle.width = Math.min(1.2, Number(baseLineStyle.width || 1.2));
           }
-          showRelationLabel = inPath && isRelationEdge;
         }
 
         baseLabel.show = showRelationLabel;
-        baseLabel.opacity = showRelationLabel ? 1 : 0;
-        baseLabel.color = showRelationLabel ? "#4b443b" : "#8a8175";
+        baseLabel.opacity = 0;
 
         return {
           ...link,
@@ -1318,6 +1385,9 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
           formatter: (params) => {
             if (params.dataType === "edge") {
               return params.data?.showRelationLabel ? params.data?.name || "亲属关系" : "";
+            }
+            if (params.data?.isLabelNode) {
+              return "";
             }
             const name = params.data?.name || "";
             const relation = params.data?.relation;
@@ -1547,7 +1617,7 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       )}
       {viewMode === "familyTree" && (
         <p className="subtle">
-          家谱按代际纵向分层（上代/核心/下代），配偶与兄弟姐妹改为核心同代左右“水平分支树”（左配偶树、右同辈树），并采用“总线+折线/侧向分支”连接。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
+          家谱按代际纵向分层（上代/核心/下代），配偶与兄弟姐妹改为核心同代左右“水平分支树”（左配偶树、右同辈树）；每个亲属采用复合节点：姓名在上、与核心关系在下，连线统一接入中心连接点。颜色按性别与辈分：男性蓝系、女性粉系，辈分越高颜色越深。
         </p>
       )}
 
