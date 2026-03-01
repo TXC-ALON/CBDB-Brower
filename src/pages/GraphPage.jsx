@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { getRelationshipGraph } from "../services/api";
 
@@ -646,6 +646,95 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
   const [dynamicLayout, setDynamicLayout] = useState(false);
   const [viewMode, setViewMode] = useState("network");
   const [nodeJumpLoading, setNodeJumpLoading] = useState(false);
+  const [visitHistory, setVisitHistory] = useState({ items: [], index: -1 });
+  const historyNavRef = useRef(false);
+
+  useEffect(() => {
+    if (!selectedPerson?.id) {
+      return;
+    }
+
+    setVisitHistory((prev) => {
+      const person = {
+        id: selectedPerson.id,
+        name: selectedPerson.name || `人物 ${selectedPerson.id}`,
+      };
+
+      if (historyNavRef.current) {
+        historyNavRef.current = false;
+        return prev;
+      }
+
+      const current = prev.items[prev.index];
+      if (current && Number(current.id) === Number(person.id)) {
+        return prev;
+      }
+
+      const nextItems = [...prev.items.slice(0, prev.index + 1), person];
+      return {
+        items: nextItems,
+        index: nextItems.length - 1,
+      };
+    });
+  }, [selectedPerson?.id, selectedPerson?.name]);
+
+  const canGoBack = visitHistory.index > 0;
+  const canGoForward = visitHistory.index >= 0 && visitHistory.index < visitHistory.items.length - 1;
+
+  const goHistory = useCallback(
+    (step) => {
+      setVisitHistory((prev) => {
+        const nextIndex = prev.index + step;
+        if (nextIndex < 0 || nextIndex >= prev.items.length) {
+          return prev;
+        }
+        const target = prev.items[nextIndex];
+        if (target?.id) {
+          historyNavRef.current = true;
+          onNavigatePerson?.({ id: target.id, name: target.name || `人物 ${target.id}` });
+        }
+        return {
+          ...prev,
+          index: nextIndex,
+        };
+      });
+    },
+    [onNavigatePerson]
+  );
+
+  const goBack = useCallback(() => {
+    goHistory(-1);
+  }, [goHistory]);
+
+  const goForward = useCallback(() => {
+    goHistory(1);
+  }, [goHistory]);
+
+  useEffect(() => {
+    const handleMouseButton = (event) => {
+      if (event.button === 3) {
+        if (!canGoBack) {
+          return;
+        }
+        event.preventDefault();
+        goBack();
+      }
+      if (event.button === 4) {
+        if (!canGoForward) {
+          return;
+        }
+        event.preventDefault();
+        goForward();
+      }
+    };
+
+    window.addEventListener("mousedown", handleMouseButton, true);
+    window.addEventListener("auxclick", handleMouseButton, true);
+    return () => {
+      window.removeEventListener("mousedown", handleMouseButton, true);
+      window.removeEventListener("auxclick", handleMouseButton, true);
+    };
+  }, [canGoBack, canGoForward, goBack, goForward]);
 
   useEffect(() => {
     if (!selectedPerson?.id) {
@@ -895,6 +984,18 @@ export default function GraphPage({ selectedPerson, onNavigatePerson }) {
       <p className="subtle">
         当前核心人物：{graph.rootName || selectedPerson.name}，关系边数 {graph.links.length}。
       </p>
+      <div className="graph-controls">
+        <button className="btn-secondary" disabled={!canGoBack} onClick={goBack}>
+          后退
+        </button>
+        <button className="btn-secondary" disabled={!canGoForward} onClick={goForward}>
+          前进
+        </button>
+        <span className="subtle">
+          历史 {visitHistory.items.length === 0 ? 0 : visitHistory.index + 1} / {visitHistory.items.length}
+          （支持鼠标侧键）
+        </span>
+      </div>
 
       <div className="graph-controls">
         <label className="graph-toggle">
